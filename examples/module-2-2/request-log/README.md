@@ -294,7 +294,7 @@ CAgent::AddAgent(
 ## Полезные ссылки
 
 - [Документация по Highload-блокам](https://dev.1c-bitrix.ru/api_d7/bitrix/highloadblock/index.php)
-- [Теория модуля 2.2](../../../topics/module-2-2.md)
+- [Теория модуля 2.2](../../../docs/module-2-2.md)
 
 ## Лицензия
 

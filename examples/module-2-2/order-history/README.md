@@ -484,7 +484,7 @@ public static function logBatch($changes)
 
 - [События модуля Sale](https://dev.1c-bitrix.ru/api_d7/bitrix/sale/index.php)
 - [Работа с заказами в D7](https://dev.1c-bitrix.ru/learning/course/index.php?COURSE_ID=42&LESSON_ID=7806)
-- [Теория модуля 2.2](../../../topics/module-2-2.md)
+- [Теория модуля 2.2](../../../docs/module-2-2.md)
 
 ## Лицензия
 

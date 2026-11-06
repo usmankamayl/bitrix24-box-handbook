@@ -416,7 +416,7 @@ CAgent::AddAgent(
 
 - [Документация по Cookie в Bitrix](https://dev.1c-bitrix.ru/api_d7/bitrix/main/web/cookie.php)
 - [Runtime-поля в ORM](https://dev.1c-bitrix.ru/learning/course/index.php?COURSE_ID=43&LESSON_ID=5753)
-- [Теория модуля 2.2](../../../topics/module-2-2.md)
+- [Теория модуля 2.2](../../../docs/module-2-2.md)
 
 ## Лицензия
 
