@@ -1,0 +1,22 @@
+-- Очередь писем для practice-2-email-queue.
+--   mysql -u root -p b24 < install.sql
+
+CREATE TABLE IF NOT EXISTS mycompany_agents_queue (
+    ID INT NOT NULL AUTO_INCREMENT,
+    DEDUP_KEY VARCHAR(128) NOT NULL,
+    EMAIL VARCHAR(255) NOT NULL,
+    SUBJECT VARCHAR(255) NOT NULL,
+    BODY TEXT NOT NULL,
+    STATUS VARCHAR(16) NOT NULL DEFAULT 'new',
+    ATTEMPTS INT NOT NULL DEFAULT 0,
+    NEXT_ATTEMPT_AT DATETIME NULL,
+    LOCKED_UNTIL DATETIME NULL,
+    LAST_ERROR TEXT NULL,
+    CREATED_AT DATETIME NOT NULL,
+    UPDATED_AT DATETIME NOT NULL,
+    SENT_AT DATETIME NULL,
+    PRIMARY KEY (ID),
+    UNIQUE KEY ux_mycompany_agents_queue_dedup (DEDUP_KEY),
+    KEY ix_mycompany_agents_queue_status (STATUS, NEXT_ATTEMPT_AT),
+    KEY ix_mycompany_agents_queue_locked (STATUS, LOCKED_UNTIL)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
