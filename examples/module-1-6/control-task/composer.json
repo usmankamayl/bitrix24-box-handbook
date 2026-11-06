@@ -1,0 +1,11 @@
+{
+    "name": "mycompany/bitrix-local",
+    "autoload": {
+        "psr-4": {
+            "MyCompany\\": "php_interface/classes/"
+        },
+        "files": [
+            "php_interface/classes/Pricing/Calculator.php"
+        ]
+    }
+}

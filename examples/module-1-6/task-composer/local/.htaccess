@@ -1,0 +1,12 @@
+# /local/.htaccess — служебные файлы Composer не отдаются по HTTP.
+# Только точечно: закрывать весь /local/ нельзя, там лежат components/,
+# templates/, ajax/ — они должны быть доступны.
+<FilesMatch "^(composer\.(json|lock)|composer\.phar)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>

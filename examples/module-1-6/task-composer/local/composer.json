@@ -1,0 +1,16 @@
+{
+    "name": "mycompany/bitrix-local",
+    "description": "Project dependencies and PSR-4 autoload for the Bitrix site",
+    "type": "project",
+    "license": "proprietary",
+    "require": {},
+    "autoload": {
+        "psr-4": {
+            "MyCompany\\": "php_interface/classes/"
+        }
+    },
+    "config": {
+        "vendor-dir": "vendor",
+        "sort-packages": true
+    }
+}
