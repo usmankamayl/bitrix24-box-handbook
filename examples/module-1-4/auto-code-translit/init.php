@@ -1,146 +1,126 @@
 <?php
+
 /**
- * Автоматическое заполнение кода элемента транслитом названия
+ * Задача 2: символьный код элемента инфоблока из названия.
  *
- * Этот файл нужно подключить в /local/php_interface/init.php:
- * require_once $_SERVER['DOCUMENT_ROOT'] . '/local/examples/auto-code-translit/init.php';
+ * Подключение в /local/php_interface/init.php:
+ *   require_once $_SERVER['DOCUMENT_ROOT'] . '/local/examples/auto-code-translit/init.php';
+ *
+ * Почему Compatible: OnBeforeIBlockElementAdd/Update отправляются старым ядром
+ * и передают массив полей по ссылке. Через addEventHandler() обработчик получил
+ * бы объект Main\Event, а не поля.
  */
 
 use Bitrix\Main\EventManager;
-use Bitrix\Main\Localization\Loc;
+use Bitrix\Main\Loader;
+
+if (!Loader::includeModule('iblock')) {
+    return;
+}
 
 $eventManager = EventManager::getInstance();
 
-// Регистрируем обработчики для элементов инфоблоков
-$eventManager->addEventHandler(
+$eventManager->addEventHandlerCompatible(
     'iblock',
     'OnBeforeIBlockElementAdd',
-    ['AutoCodeTranslit', 'onBeforeElementAdd']
+    [AutoCodeTranslit::class, 'onBeforeAdd']
 );
 
-$eventManager->addEventHandler(
+$eventManager->addEventHandlerCompatible(
     'iblock',
     'OnBeforeIBlockElementUpdate',
-    ['AutoCodeTranslit', 'onBeforeElementUpdate']
+    [AutoCodeTranslit::class, 'onBeforeUpdate']
 );
 
 /**
- * Класс для автоматической генерации символьного кода элементов
+ * Генерирует CODE, если он не задан.
+ *
+ * Что здесь важно понять:
+ * - обработчик не перетирает явно заданный код;
+ * - код уникален в рамках инфоблока, поэтому проверка идёт с IBLOCK_ID;
+ * - старый API инфоблоков не умеет «попробовать и получить ошибку уникальности»,
+ *   поэтому уникальность обеспечивается проверкой до записи. Между проверкой и
+ *   INSERT остаётся окно гонки — на уровне БД это решается уникальным индексом
+ *   (в современных версиях iblock он есть по IBLOCK_ID + CODE).
  */
-class AutoCodeTranslit
+final class AutoCodeTranslit
 {
-    /**
-     * Обработчик добавления элемента
-     *
-     * @param array &$arFields Массив полей элемента (передаётся по ссылке)
-     * @return void
-     */
-    public static function onBeforeElementAdd(&$arFields)
+    private const MAX_LENGTH = 100;
+    private const MAX_ATTEMPTS = 100;
+
+    public static function onBeforeAdd(array &$arFields): void
     {
-        self::generateCode($arFields);
+        self::fillCode($arFields);
     }
 
-    /**
-     * Обработчик обновления элемента
-     *
-     * @param array &$arFields Массив полей элемента (передаётся по ссылке)
-     * @return void
-     */
-    public static function onBeforeElementUpdate(&$arFields)
+    public static function onBeforeUpdate(array &$arFields): void
     {
-        self::generateCode($arFields);
+        self::fillCode($arFields);
     }
 
-    /**
-     * Генерирует символьный код из названия элемента
-     *
-     * @param array &$arFields Массив полей элемента
-     * @return void
-     */
-    private static function generateCode(&$arFields)
+    private static function fillCode(array &$arFields): void
     {
-        // Проверяем: если CODE не задан или пустой, но есть NAME
-        if ((empty($arFields['CODE']) || trim($arFields['CODE']) === '')
-            && !empty($arFields['NAME']))
-        {
-            // Генерируем код из названия
-            $code = \Cutil::translit(
-                $arFields['NAME'],
-                'ru',
-                [
-                    'max_len' => 100,           // Максимальная длина кода
-                    'change_case' => 'L',       // Нижний регистр (L = Lower)
-                    'replace_space' => '-',     // Заменяем пробелы на дефисы
-                    'replace_other' => '-',     // Другие символы тоже на дефисы
-                    'delete_repeat_replace' => true,  // Удаляем повторяющиеся дефисы
-                    'use_google' => false,      // Не используем Google Transliteration
-                ]
-            );
+        $code = trim((string)($arFields['CODE'] ?? ''));
+        $name = trim((string)($arFields['NAME'] ?? ''));
+        $iblockId = (int)($arFields['IBLOCK_ID'] ?? 0);
 
-            // Проверяем уникальность кода
-            $code = self::makeUniqueCode($code, $arFields);
-
-            // Устанавливаем сгенерированный код
-            $arFields['CODE'] = $code;
+        if ($code !== '' || $name === '' || $iblockId <= 0) {
+            return;
         }
+
+        $base = \Cutil::translit($name, 'ru', [
+            'max_len' => self::MAX_LENGTH,
+            'change_case' => 'L',
+            'replace_space' => '-',
+            'replace_other' => '-',
+            'delete_repeat_replace' => true,
+            'use_google' => false,
+        ]);
+
+        $base = trim($base, '-');
+        if ($base === '') {
+            return;
+        }
+
+        $arFields['CODE'] = self::makeUnique($base, $iblockId, (int)($arFields['ID'] ?? 0));
     }
 
-    /**
-     * Проверяет уникальность кода и добавляет суффикс при необходимости
-     *
-     * @param string $code Исходный код
-     * @param array $arFields Массив полей элемента
-     * @return string Уникальный код
-     */
-    private static function makeUniqueCode($code, $arFields)
+    private static function makeUnique(string $base, int $iblockId, int $elementId): string
     {
-        if (empty($arFields['IBLOCK_ID'])) {
-            return $code;
+        $code = $base;
+
+        for ($attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++) {
+            if (!self::codeExists($code, $iblockId, $elementId)) {
+                return $code;
+            }
+
+            $code = $base . '-' . $attempt;
         }
 
-        \CModule::IncludeModule('iblock');
+        // Исчерпали попытки: гарантированно уникальный хвост вместо бесконечного цикла.
+        return $base . '-' . substr(md5((string)microtime(true)), 0, 6);
+    }
 
-        $originalCode = $code;
-        $counter = 1;
+    private static function codeExists(string $code, int $iblockId, int $elementId): bool
+    {
+        $filter = [
+            'IBLOCK_ID' => $iblockId,
+            'CODE' => $code,
+            'CHECK_PERMISSIONS' => 'N',
+        ];
 
-        // Цикл проверки уникальности
-        while (true) {
-            // Формируем фильтр для проверки
-            $filter = [
-                'IBLOCK_ID' => $arFields['IBLOCK_ID'],
-                'CODE' => $code,
-            ];
-
-            // При обновлении исключаем текущий элемент
-            if (!empty($arFields['ID'])) {
-                $filter['!ID'] = $arFields['ID'];
-            }
-
-            // Проверяем наличие элемента с таким кодом
-            $existElement = \CIBlockElement::GetList(
-                [],
-                $filter,
-                false,
-                ['nTopCount' => 1],
-                ['ID', 'CODE']
-            )->Fetch();
-
-            // Если элемент не найден — код уникален
-            if (!$existElement) {
-                break;
-            }
-
-            // Добавляем суффикс и пробуем снова
-            $code = $originalCode . '-' . $counter;
-            $counter++;
-
-            // Защита от бесконечного цикла
-            if ($counter > 1000) {
-                $code = $originalCode . '-' . time();
-                break;
-            }
+        if ($elementId > 0) {
+            $filter['!ID'] = $elementId;
         }
 
-        return $code;
+        $row = \CIBlockElement::GetList(
+            [],
+            $filter,
+            false,
+            ['nTopCount' => 1],
+            ['ID']
+        )->Fetch();
+
+        return $row !== false;
     }
 }

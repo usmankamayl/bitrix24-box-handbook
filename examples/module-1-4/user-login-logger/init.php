@@ -1,210 +1,174 @@
 <?php
+
 /**
- * Логирование попыток входа пользователей
+ * Задача 1: логирование попыток входа и выхода пользователей.
  *
- * Этот файл нужно подключить в /local/php_interface/init.php:
- * require_once $_SERVER['DOCUMENT_ROOT'] . '/local/examples/user-login-logger/init.php';
+ * Подключение в /local/php_interface/init.php:
+ *   require_once $_SERVER['DOCUMENT_ROOT'] . '/local/examples/user-login-logger/init.php';
+ *
+ * Почему Compatible: OnAfterUserLogin, OnUserLogout и OnAfterUserLogout
+ * отправляются старым ядром (GetModuleEvents + ExecuteModuleEventEx) и передают
+ * позиционные аргументы, а OnAfterUserLogin — ещё и по ссылке. Подписка через
+ * addEventHandler() отдала бы в обработчик объект Main\Event.
  */
 
 use Bitrix\Main\EventManager;
 
 $eventManager = EventManager::getInstance();
 
-// Регистрируем обработчики событий входа и выхода
-$eventManager->addEventHandler(
+$eventManager->addEventHandlerCompatible(
     'main',
     'OnAfterUserLogin',
-    'UserLoginLogger::onAfterLogin'
+    [UserLoginLogger::class, 'onAfterLogin']
 );
 
-$eventManager->addEventHandler(
-    'main',
-    'OnUserLoginFail',
-    'UserLoginLogger::onLoginFail'
-);
-
-$eventManager->addEventHandler(
+$eventManager->addEventHandlerCompatible(
     'main',
     'OnUserLogout',
-    'UserLoginLogger::onLogout'
+    [UserLoginLogger::class, 'onLogout']
 );
 
 /**
- * Класс для логирования действий пользователей
+ * Пишет строки в лог-файл с простой ротацией.
+ *
+ * Что здесь важно понять, а не скопировать:
+ * - пароль не логируется ни при каком исходе, даже если ядро его передало;
+ * - IP берётся из REMOTE_ADDR через Context, а не из X-Forwarded-For:
+ *   этот заголовок подставляет клиент, и доверять ему без своего прокси нельзя;
+ * - запись идёт с LOCK_EX, иначе два параллельных хита перемешают строки.
  */
-class UserLoginLogger
+final class UserLoginLogger
 {
-    /**
-     * Путь к файлу логов
-     */
-    const LOG_FILE = '/local/logs/user_login.log';
+    private const LOG_DIR = '/local/logs';
+    private const LOG_FILE = 'user_login.log';
+    private const MAX_SIZE = 5 * 1024 * 1024;
 
     /**
-     * Обработчик успешного входа пользователя
+     * Обработчик main::OnAfterUserLogin.
      *
-     * @param array $arUser Данные пользователя
-     * @return void
+     * Контракт события: array &$arParams, где
+     *   USER_ID         — ID пользователя или 0 при неудаче;
+     *   LOGIN           — введённый логин;
+     *   PASSWORD        — пароль или его md5 (не логируем);
+     *   RESULT_MESSAGE  — true при успехе либо массив ['TYPE', 'MESSAGE'].
+     *
+     * Неуспешный вход — это USER_ID <= 0. Отдельного события
+     * «логин не удался» в модуле main нет.
      */
-    public static function onAfterLogin($arUser)
+    public static function onAfterLogin(array &$arParams): void
     {
-        $userId = $arUser['user_fields']['ID'] ?? $arUser['ID'] ?? 'unknown';
-        $login = $arUser['user_fields']['LOGIN'] ?? $arUser['LOGIN'] ?? 'unknown';
+        $userId = (int)($arParams['USER_ID'] ?? 0);
+        $login = (string)($arParams['LOGIN'] ?? '');
 
-        $message = sprintf(
-            "[%s] SUCCESS LOGIN | User ID: %s | Login: %s | IP: %s | User Agent: %s",
-            date('Y-m-d H:i:s'),
-            $userId,
-            $login,
-            self::getUserIP(),
+        if ($userId > 0) {
+            self::write(sprintf(
+                'LOGIN OK | user_id=%d | login=%s | ip=%s | ua=%s',
+                $userId,
+                self::sanitize($login),
+                self::getIp(),
+                self::getUserAgent()
+            ));
+
+            return;
+        }
+
+        $message = $arParams['RESULT_MESSAGE'] ?? '';
+        if (is_array($message)) {
+            $message = (string)($message['MESSAGE'] ?? '');
+        } elseif ($message === true) {
+            $message = '';
+        }
+
+        self::write(sprintf(
+            'LOGIN FAIL | login=%s | reason=%s | ip=%s | ua=%s',
+            self::sanitize($login),
+            self::sanitize((string)$message),
+            self::getIp(),
             self::getUserAgent()
-        );
-
-        self::writeLog($message);
+        ));
     }
 
     /**
-     * Обработчик неудачной попытки входа
-     *
-     * @param string $login Логин пользователя
-     * @param string $password Пароль (не записываем в лог!)
-     * @param string $strError Текст ошибки
-     * @return void
+     * Обработчик main::OnUserLogout — параметр один: ID пользователя.
      */
-    public static function onLoginFail($login, $password, $strError)
+    public static function onLogout($userId): void
     {
-        $message = sprintf(
-            "[%s] FAILED LOGIN | Login: %s | Error: %s | IP: %s | User Agent: %s",
-            date('Y-m-d H:i:s'),
-            $login,
-            $strError,
-            self::getUserIP(),
-            self::getUserAgent()
-        );
-
-        self::writeLog($message);
+        self::write(sprintf(
+            'LOGOUT | user_id=%d | ip=%s',
+            (int)$userId,
+            self::getIp()
+        ));
     }
 
-    /**
-     * Обработчик выхода пользователя
-     *
-     * @param int $userId ID пользователя
-     * @return void
-     */
-    public static function onLogout($userId)
+    private static function write(string $line): void
     {
-        global $USER;
+        $path = self::getLogPath();
+        $entry = sprintf("[%s] %s\n", date('Y-m-d H:i:s'), $line);
 
-        $login = $USER->GetLogin() ?: 'unknown';
-
-        $message = sprintf(
-            "[%s] LOGOUT | User ID: %s | Login: %s | IP: %s",
-            date('Y-m-d H:i:s'),
-            $userId,
-            $login,
-            self::getUserIP()
-        );
-
-        self::writeLog($message);
-    }
-
-    /**
-     * Записывает сообщение в файл лога
-     *
-     * @param string $message Сообщение для записи
-     * @return void
-     */
-    private static function writeLog($message)
-    {
-        $logPath = $_SERVER['DOCUMENT_ROOT'] . self::LOG_FILE;
-        $logDir = dirname($logPath);
-
-        // Создаём директорию для логов, если её нет
-        if (!is_dir($logDir)) {
-            mkdir($logDir, 0755, true);
+        if (@file_put_contents($path, $entry, FILE_APPEND | LOCK_EX) === false) {
+            // Лог не должен ломать авторизацию: молча выходим.
+            return;
         }
 
-        // Записываем сообщение в файл
-        file_put_contents($logPath, $message . PHP_EOL, FILE_APPEND);
-
-        // Ограничиваем размер файла (5 МБ)
-        self::rotateLogs($logPath);
+        self::rotate($path);
     }
 
-    /**
-     * Ротация логов при превышении размера
-     *
-     * @param string $logPath Путь к файлу лога
-     * @return void
-     */
-    private static function rotateLogs($logPath)
+    private static function getLogPath(): string
     {
-        $maxSize = 5 * 1024 * 1024; // 5 МБ
+        $dir = $_SERVER['DOCUMENT_ROOT'] . self::LOG_DIR;
 
-        if (file_exists($logPath) && filesize($logPath) > $maxSize) {
-            $backupPath = $logPath . '.' . date('Y-m-d_H-i-s') . '.bak';
-            rename($logPath, $backupPath);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
 
-            // Удаляем старые бэкапы (оставляем только последние 5)
-            $logDir = dirname($logPath);
-            $backups = glob($logDir . '/*.bak');
+        // /local/ лежит внутри DOCUMENT_ROOT и доступен по HTTP.
+        // Закрываем каталог логов на уровне веб-сервера (Apache).
+        $htaccess = $dir . '/.htaccess';
+        if (!is_file($htaccess)) {
+            file_put_contents($htaccess, "Require all denied\nDeny from all\n");
+        }
 
-            if (count($backups) > 5) {
-                usort($backups, function($a, $b) {
-                    return filemtime($a) - filemtime($b);
-                });
+        return $dir . '/' . self::LOG_FILE;
+    }
 
-                $toDelete = array_slice($backups, 0, count($backups) - 5);
-                foreach ($toDelete as $file) {
-                    unlink($file);
-                }
-            }
+    private static function rotate(string $path): void
+    {
+        if (!is_file($path) || filesize($path) < self::MAX_SIZE) {
+            return;
+        }
+
+        @rename($path, $path . '.' . date('Y-m-d_His') . '.bak');
+
+        $backups = glob($path . '.*.bak') ?: [];
+        if (count($backups) <= 5) {
+            return;
+        }
+
+        usort($backups, static fn(string $a, string $b): int => filemtime($a) <=> filemtime($b));
+
+        foreach (array_slice($backups, 0, count($backups) - 5) as $old) {
+            @unlink($old);
         }
     }
 
-    /**
-     * Получает IP-адрес пользователя
-     *
-     * @return string
-     */
-    private static function getUserIP()
+    private static function getIp(): string
     {
-        // Проверяем различные заголовки для получения реального IP
-        $headers = [
-            'HTTP_CLIENT_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'HTTP_X_FORWARDED',
-            'HTTP_FORWARDED_FOR',
-            'HTTP_FORWARDED',
-            'REMOTE_ADDR'
-        ];
+        return (string)\Bitrix\Main\Context::getCurrent()->getRequest()->getRemoteAddress();
+    }
 
-        foreach ($headers as $header) {
-            if (!empty($_SERVER[$header])) {
-                $ip = $_SERVER[$header];
-
-                // Если несколько IP через запятую, берём первый
-                if (strpos($ip, ',') !== false) {
-                    $ips = explode(',', $ip);
-                    $ip = trim($ips[0]);
-                }
-
-                // Валидация IP
-                if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                    return $ip;
-                }
-            }
-        }
-
-        return 'unknown';
+    private static function getUserAgent(): string
+    {
+        return self::sanitize((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 200);
     }
 
     /**
-     * Получает User Agent пользователя
-     *
-     * @return string
+     * Лог — текстовый файл построчного формата: убираем переводы строк,
+     * чтобы подставленный логин не создал фальшивую запись.
      */
-    private static function getUserAgent()
+    private static function sanitize(string $value, int $maxLength = 100): string
     {
-        return $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+        $value = str_replace(["\r", "\n", '|'], [' ', ' ', '/'], $value);
+
+        return mb_substr($value, 0, $maxLength);
     }
 }
