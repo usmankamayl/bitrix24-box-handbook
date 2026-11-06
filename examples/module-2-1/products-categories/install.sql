@@ -1,0 +1,38 @@
+-- Таблица категорий
+CREATE TABLE IF NOT EXISTS `custom_categories` (
+    `ID` INT(11) NOT NULL AUTO_INCREMENT,
+    `NAME` VARCHAR(255) NOT NULL COMMENT 'Название категории',
+    `CODE` VARCHAR(255) DEFAULT NULL COMMENT 'Символьный код',
+    `PARENT_ID` INT(11) DEFAULT NULL COMMENT 'ID родительской категории',
+    `ACTIVE` CHAR(1) NOT NULL DEFAULT 'Y' COMMENT 'Активность (Y/N)',
+    `SORT` INT(11) NOT NULL DEFAULT 500 COMMENT 'Сортировка',
+    `DATE_CREATE` DATETIME NOT NULL COMMENT 'Дата создания',
+    PRIMARY KEY (`ID`),
+    UNIQUE KEY `UX_CODE` (`CODE`),
+    INDEX `IX_PARENT_ID` (`PARENT_ID`),
+    INDEX `IX_ACTIVE` (`ACTIVE`),
+    INDEX `IX_SORT` (`SORT`),
+    FOREIGN KEY (`PARENT_ID`) REFERENCES `custom_categories` (`ID`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Категории товаров';
+
+-- Таблица товаров
+CREATE TABLE IF NOT EXISTS `custom_products` (
+    `ID` INT(11) NOT NULL AUTO_INCREMENT,
+    `NAME` VARCHAR(255) NOT NULL COMMENT 'Название товара',
+    `CODE` VARCHAR(255) DEFAULT NULL COMMENT 'Символьный код',
+    `CATEGORY_ID` INT(11) NOT NULL COMMENT 'ID категории',
+    `PRICE` DECIMAL(10,2) NOT NULL COMMENT 'Цена',
+    `OLD_PRICE` DECIMAL(10,2) DEFAULT NULL COMMENT 'Старая цена',
+    `QUANTITY` INT(11) NOT NULL DEFAULT 0 COMMENT 'Количество на складе',
+    `ACTIVE` CHAR(1) NOT NULL DEFAULT 'Y' COMMENT 'Активность (Y/N)',
+    `SORT` INT(11) NOT NULL DEFAULT 500 COMMENT 'Сортировка',
+    `DATE_CREATE` DATETIME NOT NULL COMMENT 'Дата создания',
+    PRIMARY KEY (`ID`),
+    UNIQUE KEY `UX_CODE` (`CODE`),
+    INDEX `IX_CATEGORY_ID` (`CATEGORY_ID`),
+    INDEX `IX_ACTIVE` (`ACTIVE`),
+    INDEX `IX_PRICE` (`PRICE`),
+    INDEX `IX_QUANTITY` (`QUANTITY`),
+    INDEX `IX_SORT` (`SORT`),
+    FOREIGN KEY (`CATEGORY_ID`) REFERENCES `custom_categories` (`ID`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Товары';

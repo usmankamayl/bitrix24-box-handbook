@@ -1,0 +1,138 @@
+.weather-widget {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    max-width: 400px;
+}
+
+.weather-widget__error {
+    padding: 20px;
+    background: #fee;
+    border: 1px solid #fcc;
+    border-radius: 8px;
+    color: #c33;
+    text-align: center;
+}
+
+.weather-widget__container {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 16px;
+    padding: 24px;
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.weather-widget__location h3 {
+    margin: 0 0 20px 0;
+    font-size: 24px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.weather-widget__main {
+    margin-bottom: 24px;
+}
+
+.weather-widget__current {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+}
+
+.weather-widget__icon img {
+    width: 100px;
+    height: 100px;
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
+}
+
+.weather-widget__temp {
+    display: flex;
+    flex-direction: column;
+}
+
+.weather-widget__temp-value {
+    font-size: 48px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 8px;
+}
+
+.weather-widget__description {
+    font-size: 18px;
+    margin-bottom: 4px;
+    text-transform: capitalize;
+}
+
+.weather-widget__feels-like {
+    font-size: 14px;
+    opacity: 0.9;
+}
+
+.weather-widget__details {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    backdrop-filter: blur(10px);
+}
+
+.weather-widget__detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.weather-widget__detail-label {
+    font-size: 13px;
+    opacity: 0.8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.weather-widget__detail-value {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.weather-widget__sun {
+    display: flex;
+    justify-content: space-around;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+}
+
+.weather-widget__sun-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.weather-widget__sun-label {
+    font-size: 14px;
+    opacity: 0.9;
+}
+
+.weather-widget__sun-value {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+/* Адаптив */
+@media (max-width: 480px) {
+    .weather-widget__container {
+        padding: 16px;
+    }
+
+    .weather-widget__temp-value {
+        font-size: 36px;
+    }
+
+    .weather-widget__icon img {
+        width: 80px;
+        height: 80px;
+    }
+}

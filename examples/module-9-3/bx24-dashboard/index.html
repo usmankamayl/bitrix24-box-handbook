@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<!--
+    Дашборд для Bitrix24 — демонстрация основных возможностей BX24.js:
+    callMethod, callBatch, callListMethod, диалоги, уведомления, fitWindow
+-->
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>CRM Дашборд</title>
+    <script src="//api.bitrix24.com/api/v1/"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, Arial, sans-serif;
+            margin: 0; padding: 20px; background: #eef1f5;
+        }
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; }
+        .card {
+            background: white; border-radius: 10px; padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08); cursor: pointer;
+            transition: transform .15s;
+        }
+        .card:hover { transform: translateY(-2px); }
+        .card .num { font-size: 32px; font-weight: 700; color: #2e5eff; }
+        .card .lbl { color: #666; font-size: 13px; margin-top: 5px; }
+        .section { background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+        .section h3 { margin-top: 0; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; }
+        th { color: #888; font-weight: 500; font-size: 12px; text-transform: uppercase; }
+        tr:hover td { background: #f8f9ff; }
+        .btn {
+            background: #2e5eff; color: white; border: none; padding: 8px 16px;
+            border-radius: 6px; cursor: pointer; margin-right: 8px;
+        }
+        .btn.secondary { background: #e5e9f0; color: #333; }
+        .loading { color: #999; padding: 20px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<h2>CRM Дашборд</h2>
+
+<!-- Статистика карточками -->
+<div class="grid">
+    <div class="card" onclick="openList('/crm/lead/list/')">
+        <div class="num" id="cnt-leads">–</div>
+        <div class="lbl">Лидов</div>
+    </div>
+    <div class="card" onclick="openList('/crm/deal/list/')">
+        <div class="num" id="cnt-deals">–</div>
+        <div class="lbl">Сделок</div>
+    </div>
+    <div class="card" onclick="openList('/crm/contact/list/')">
+        <div class="num" id="cnt-contacts">–</div>
+        <div class="lbl">Контактов</div>
+    </div>
+    <div class="card" onclick="openList('/crm/company/list/')">
+        <div class="num" id="cnt-companies">–</div>
+        <div class="lbl">Компаний</div>
+    </div>
+</div>
+
+<!-- Действия -->
+<div class="section">
+    <h3>Действия</h3>
+    <button class="btn" onclick="createTask()">Создать задачу</button>
+    <button class="btn secondary" onclick="pickUser()">Выбрать пользователя</button>
+    <button class="btn secondary" onclick="BX24.fitWindow()">Подогнать размер</button>
+    <span id="picked-user" style="margin-left:10px; color:#666;"></span>
+</div>
+
+<!-- Последние сделки -->
+<div class="section">
+    <h3>Последние сделки</h3>
+    <div id="deals-table" class="loading">Загрузка...</div>
+</div>
+
+<script>
+// Всё внутри BX24.init — библиотека должна получить AUTH_ID из URL
+BX24.init(function() {
+    loadCounters();
+    loadRecentDeals();
+});
+
+// Пример 1: callBatch — один HTTP-запрос для 4 счётчиков
+function loadCounters() {
+    BX24.callBatch({
+        leads:     ['crm.lead.list',     {select: ['ID'], order: {ID: 'DESC'}}],
+        deals:     ['crm.deal.list',     {select: ['ID'], order: {ID: 'DESC'}}],
+        contacts:  ['crm.contact.list',  {select: ['ID'], order: {ID: 'DESC'}}],
+        companies: ['crm.company.list',  {select: ['ID'], order: {ID: 'DESC'}}]
+    }, function(r) {
+        document.getElementById('cnt-leads').textContent     = r.leads.total();
+        document.getElementById('cnt-deals').textContent     = r.deals.total();
+        document.getElementById('cnt-contacts').textContent  = r.contacts.total();
+        document.getElementById('cnt-companies').textContent = r.companies.total();
+    });
+}
+
+// Пример 2: callMethod с пагинацией — грузим последние 10 сделок
+function loadRecentDeals() {
+    BX24.callMethod('crm.deal.list', {
+        order: {DATE_CREATE: 'DESC'},
+        select: ['ID', 'TITLE', 'OPPORTUNITY', 'CURRENCY_ID', 'STAGE_ID', 'DATE_CREATE'],
+        limit: 10
+    }, function(result) {
+        if (result.error()) {
+            document.getElementById('deals-table').innerHTML = 'Ошибка: ' + result.error();
+            return;
+        }
+        renderDeals(result.data());
+        BX24.fitWindow();
+    });
+}
+
+function renderDeals(deals) {
+    if (!deals.length) {
+        document.getElementById('deals-table').innerHTML = '<div class="loading">Сделок нет</div>';
+        return;
+    }
+    let html = '<table><tr><th>ID</th><th>Название</th><th>Сумма</th><th>Стадия</th><th>Дата</th><th></th></tr>';
+    deals.forEach(d => {
+        html += `<tr>
+            <td>${d.ID}</td>
+            <td>${d.TITLE}</td>
+            <td>${d.OPPORTUNITY} ${d.CURRENCY_ID}</td>
+            <td>${d.STAGE_ID}</td>
+            <td>${(d.DATE_CREATE || '').slice(0, 10)}</td>
+            <td><a href="#" onclick="openDeal(${d.ID}); return false;">Открыть</a></td>
+        </tr>`;
+    });
+    html += '</table>';
+    document.getElementById('deals-table').innerHTML = html;
+}
+
+// Пример 3: диалог подтверждения + callMethod
+function createTask() {
+    BX24.showPrompt('Название задачи:', function(title) {
+        if (!title) return;
+        BX24.callMethod('tasks.task.add', {
+            fields: { TITLE: title, RESPONSIBLE_ID: 1 }
+        }, function(r) {
+            if (r.error()) {
+                BX24.showNotification('Ошибка: ' + r.error(), 'error');
+            } else {
+                BX24.showNotification('Задача #' + r.data().task.id + ' создана', 'success');
+            }
+        });
+    });
+}
+
+// Пример 4: выбор пользователя через стандартный диалог
+function pickUser() {
+    BX24.selectUser(function(user) {
+        document.getElementById('picked-user').textContent =
+            'Выбран: ' + user.name + ' (ID ' + user.id + ')';
+    });
+}
+
+// Пример 5: навигация внутри портала
+function openList(path) { BX24.openPath(path); }
+function openDeal(id)   { BX24.openPath('/crm/deal/details/' + id + '/'); }
+</script>
+</body>
+</html>

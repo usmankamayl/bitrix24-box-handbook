@@ -1,0 +1,34 @@
+# --- Агентские / IDE-файлы (не для публичного репозитория) ---
+AGENTS.md
+CLAUDE.md
+.claude/
+.cursor/
+.cursorrules
+.windsurf/
+.aider*
+.mcp.json
+.idea/
+.vscode/
+
+# --- Секреты и локальные конфиги ---
+.env
+.env.*
+!.env.example
+*.local.php
+settings.local.json
+
+# --- Мусор ОС и редакторов ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+*.bak
+*.orig
+*.rej
+
+# --- Логи и временные файлы ---
+*.log
+*.tmp
+/tmp/
+/cache/

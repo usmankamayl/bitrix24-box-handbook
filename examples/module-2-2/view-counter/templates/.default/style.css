@@ -1,0 +1,235 @@
+.view-counter {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Основной счетчик */
+.view-counter__main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 24px;
+    background: #f8f9fa;
+    border-radius: 12px;
+    margin-bottom: 20px;
+}
+
+.view-counter__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: #fff;
+    border-radius: 50%;
+    color: #6c757d;
+}
+
+.view-counter__value {
+    font-size: 32px;
+    font-weight: 700;
+    color: #0d6efd;
+}
+
+.view-counter__label {
+    font-size: 14px;
+    color: #6c757d;
+}
+
+/* Детальная статистика */
+.view-counter__stats {
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat-item {
+    text-align: center;
+    padding: 16px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.stat-item__value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #212529;
+    margin-bottom: 4px;
+}
+
+.stat-item__label {
+    font-size: 13px;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* График по дням */
+.view-counter__chart {
+    margin-top: 24px;
+}
+
+.view-counter__chart h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: #212529;
+}
+
+.chart {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 8px;
+    height: 200px;
+    padding: 16px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.chart__bar {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 40px;
+}
+
+.chart__bar-fill {
+    width: 100%;
+    min-height: 4px;
+    background: linear-gradient(180deg, #0d6efd 0%, #0a58ca 100%);
+    border-radius: 4px 4px 0 0;
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+.chart__bar-fill:hover {
+    background: linear-gradient(180deg, #0a58ca 0%, #084298 100%);
+}
+
+.chart__bar-value {
+    position: absolute;
+    top: -24px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    font-weight: 600;
+    color: #212529;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.chart__bar-fill:hover .chart__bar-value {
+    opacity: 1;
+}
+
+.chart__bar-label {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #6c757d;
+    text-align: center;
+}
+
+/* Мета-информация */
+.view-counter__meta {
+    text-align: center;
+    padding: 12px;
+    color: #6c757d;
+    font-size: 12px;
+}
+
+/* Адаптивность */
+@media (max-width: 768px) {
+    .view-counter {
+        padding: 12px;
+    }
+
+    .view-counter__main {
+        padding: 12px 16px;
+    }
+
+    .view-counter__value {
+        font-size: 24px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .stat-item {
+        padding: 12px;
+    }
+
+    .stat-item__value {
+        font-size: 20px;
+    }
+
+    .chart {
+        height: 150px;
+        padding: 12px;
+        gap: 4px;
+    }
+
+    .chart__bar {
+        min-width: 30px;
+    }
+
+    .chart__bar-label {
+        font-size: 9px;
+    }
+}
+
+/* Анимация при загрузке */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.view-counter__main,
+.view-counter__stats {
+    animation: fadeIn 0.5s ease;
+}
+
+.stat-item {
+    animation: fadeIn 0.5s ease;
+}
+
+.stat-item:nth-child(1) { animation-delay: 0.1s; }
+.stat-item:nth-child(2) { animation-delay: 0.2s; }
+.stat-item:nth-child(3) { animation-delay: 0.3s; }
+.stat-item:nth-child(4) { animation-delay: 0.4s; }
+
+.chart__bar {
+    animation: slideUp 0.6s ease;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

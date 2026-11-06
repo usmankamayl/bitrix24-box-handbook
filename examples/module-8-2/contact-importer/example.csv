@@ -1,0 +1,6 @@
+name,last_name,second_name,phone,email,company_id,type,source,phone_type,email_type,assigned_by_id,comments
+Иван,Петров,Сергеевич,+7 (999) 123-45-67,ivanov@example.com,1,CLIENT,WEB,WORK,WORK,1,Клиент с сайта
+Мария,Сидорова,Ивановна,8 (999) 234-56-78,sidorova@example.com,1,CLIENT,CALL,MOBILE,WORK,1,Звонила по телефону
+Петр,Козлов,,+7 (999) 345-67-89,kozlov@example.com,2,CLIENT,EMAIL,WORK,WORK,2,Email-рассылка
+Анна,Смирнова,Николаевна,+7 (999) 456-78-90,,2,CLIENT,ADVERTISING,WORK,,1,Контекстная реклама
+Сергей,Морозов,Викторович,7 9996789012,morozov@example.com,1,SUPPLIER,WEB,MOBILE,WORK,3,Поставщик

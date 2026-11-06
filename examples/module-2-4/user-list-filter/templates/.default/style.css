@@ -1,0 +1,237 @@
+.user-list-container {
+    max-width: 1200px;
+    margin: 20px auto;
+    padding: 20px;
+}
+
+/* Фильтр */
+.user-filter {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.filter-form {
+    display: flex;
+    flex-direction: column;
+}
+
+.filter-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr auto;
+    gap: 15px;
+    align-items: end;
+}
+
+.filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.filter-field label {
+    font-weight: 500;
+    font-size: 14px;
+    color: #333;
+}
+
+.filter-field input,
+.filter-field select {
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.filter-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    text-decoration: none;
+    display: inline-block;
+    transition: background-color 0.2s;
+}
+
+.btn-primary {
+    background: #4a90e2;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #357abd;
+}
+
+.btn-secondary {
+    background: #6c757d;
+    color: #fff;
+}
+
+.btn-secondary:hover {
+    background: #5a6268;
+}
+
+/* Информация о результатах */
+.results-info {
+    margin-bottom: 15px;
+    color: #666;
+    font-size: 14px;
+}
+
+/* Таблица */
+.user-table-wrapper {
+    overflow-x: auto;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.user-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.user-table thead {
+    background: #f8f9fa;
+}
+
+.user-table th {
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    color: #333;
+    border-bottom: 2px solid #dee2e6;
+    white-space: nowrap;
+}
+
+.user-table td {
+    padding: 12px;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.user-row.inactive {
+    opacity: 0.6;
+    background: #f9f9f9;
+}
+
+.user-photo {
+    width: 50px;
+}
+
+.user-photo img,
+.photo-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.photo-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #4a90e2;
+    color: #fff;
+    font-weight: 600;
+    font-size: 18px;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-badge.active {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-badge.inactive {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.user-groups {
+    font-size: 12px;
+    color: #666;
+}
+
+/* Пагинация */
+.pagination {
+    display: flex;
+    justify-content: center;
+    gap: 5px;
+    margin-top: 20px;
+}
+
+.page-link {
+    padding: 8px 12px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    text-decoration: none;
+    color: #4a90e2;
+    transition: all 0.2s;
+}
+
+.page-link:hover {
+    background: #f8f9fa;
+}
+
+.page-link.active {
+    background: #4a90e2;
+    color: #fff;
+    border-color: #4a90e2;
+}
+
+/* Нет результатов */
+.no-results {
+    text-align: center;
+    padding: 60px 20px;
+    color: #999;
+}
+
+.no-results p {
+    font-size: 18px;
+}
+
+/* Адаптивность */
+@media (max-width: 992px) {
+    .filter-row {
+        grid-template-columns: 1fr;
+    }
+
+    .filter-actions {
+        justify-content: stretch;
+    }
+
+    .filter-actions .btn {
+        flex: 1;
+    }
+}
+
+@media (max-width: 768px) {
+    .user-table {
+        font-size: 12px;
+    }
+
+    .user-table th,
+    .user-table td {
+        padding: 8px;
+    }
+
+    .user-photo img,
+    .photo-placeholder {
+        width: 30px;
+        height: 30px;
+    }
+}

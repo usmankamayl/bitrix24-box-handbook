@@ -1,0 +1,4 @@
+external_id,title,name,last_name,email,phone
+ext-1001,Заявка с сайта,Иван,Петров,ivan.petrov@example.com,+79990001122
+ext-1002,Заявка с сайта,Мария,Сидорова,maria.sidorova@example.com,+79990002233
+ext-1003,Заявка с выставки,Алексей,Кузнецов,a.kuznetsov@example.com,+79990003344

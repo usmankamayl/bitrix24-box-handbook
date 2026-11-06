@@ -1,0 +1,13 @@
+# Запрет прямого доступа к логам.
+#
+# Это работает только на Apache. На nginx .htaccess не читается: там нужен
+# отдельный location в конфиге сайта (см. README, раздел «Ограничения»).
+# Надёжнее — держать логи вне DOCUMENT_ROOT.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

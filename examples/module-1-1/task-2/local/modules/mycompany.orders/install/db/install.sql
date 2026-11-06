@@ -1,0 +1,14 @@
+-- Таблица заказов учебного модуля mycompany.orders.
+-- Запускается установщиком модуля: install/index.php -> InstallDB().
+
+CREATE TABLE IF NOT EXISTS mycompany_orders (
+    ID INT(11) NOT NULL AUTO_INCREMENT,
+    USER_ID INT(11) NOT NULL,
+    DATE_CREATE DATETIME DEFAULT NULL,
+    PRICE DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+    STATUS VARCHAR(50) NOT NULL DEFAULT 'NEW',
+    PRIMARY KEY (ID),
+    KEY IX_MYCOMPANY_ORDERS_USER_ID (USER_ID),
+    KEY IX_MYCOMPANY_ORDERS_STATUS (STATUS),
+    KEY IX_MYCOMPANY_ORDERS_DATE_CREATE (DATE_CREATE)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
