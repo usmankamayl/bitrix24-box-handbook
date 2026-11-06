@@ -5,8 +5,10 @@
  * Файл: /local/modules/mycompany.hello/lib/Helper.php
  * Namespace: Mycompany\Hello (соответствует MODULE_ID mycompany.hello)
  *
- * Автозагрузка работает автоматически после ModuleManager::registerModule —
- * класс подхватится по namespace, без registerAutoLoadClasses.
+ * Автозагрузка работает после Loader::includeModule('mycompany.hello'):
+ * include.php модуля регистрирует namespace Mycompany\Hello на каталог lib/
+ * явным вызовом Loader::registerNamespace(). Регистрация в коде модуля, а не
+ * в init.php проекта, — потому что namespace принадлежит модулю.
  */
 
 namespace Mycompany\Hello;
@@ -33,7 +35,6 @@ class Helper
         return [
             'timestamp' => $now->getTimestamp(),
             'date' => $now->format('d.m.Y H:i:s'),
-            'timezone' => $now->getTimeZone()->getName(),
         ];
     }
 }

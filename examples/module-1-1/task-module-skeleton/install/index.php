@@ -2,9 +2,12 @@
 /**
  * Установщик модуля mycompany.hello.
  *
- * CModule вызывает методы в порядке:
- *   DoInstall:  InstallDB → InstallEvents → InstallFiles → registerModule
+ * CModule вызывает методы в таком порядке (мы держим его сами в DoInstall):
+ *   DoInstall:  InstallFiles → InstallDB → InstallEvents → registerModule
  *   DoUninstall: UnInstallFiles → UnInstallEvents → UnInstallDB → unRegisterModule
+ *
+ * registerModule — последней: если она пройдёт, а InstallDB() упадёт,
+ * получится «модуль установлен, таблиц нет».
  */
 
 use Bitrix\Main\Application;
@@ -42,16 +45,26 @@ class mycompany_hello extends CModule
      */
     public function DoInstall()
     {
-        global $APPLICATION, $step;
+        global $APPLICATION, $USER, $step;
+
+        // Установка модуля — административное действие. Кнопка в админке не
+        // защита: страницу установки можно вызвать запросом.
+        if (!$USER->IsAdmin()) {
+            $APPLICATION->ThrowException('Установка модуля доступна только администратору.');
+            return false;
+        }
+
         $step = (int)$step;
 
-        // Этап 1: файлы и права — вызывается на первом шаге мастера
+        // Этап 1: файлы. В реальном мастере — отдельный шаг мастера установки.
         if ($step < 2) {
             $this->InstallFiles();
         }
 
-        // Этап 2: БД, события, агенты, регистрация
-        $this->InstallDB();
+        // Этап 2: схема БД, события, регистрация модуля.
+        if (!$this->InstallDB()) {
+            return false;
+        }
         $this->InstallEvents();
         ModuleManager::registerModule($this->MODULE_ID);
 

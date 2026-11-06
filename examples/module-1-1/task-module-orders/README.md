@@ -26,7 +26,7 @@
 ## Структура
 
 ```
-task-2/
+task-module-orders/
 ├── README.md                      этот файл
 ├── orders-demo.php                страница демо → копируется в корень сайта
 └── local/
@@ -39,6 +39,7 @@ task-2/
     │       │   └── db/
     │       │       ├── install.sql    CREATE TABLE mycompany_orders
     │       │       └── uninstall.sql  DROP TABLE
+    │       ├── include.php    registerNamespace + то, что нужно на каждом хите
     │       └── lib/
     │           └── OrderTable.php     ORM-сущность Mycompany\Orders\OrderTable
     ├── php_interface/
@@ -53,7 +54,7 @@ task-2/
 
 ## Установка
 
-1. Скопировать содержимое `task-2/local/` в `/local/` сайта (не перезаписывая существующий `init.php` — см. ниже), а `orders-demo.php` — в корень сайта.
+1. Скопировать содержимое `task-module-orders/local/` в `/local/` сайта (не перезаписывая существующий `init.php` — см. ниже), а `orders-demo.php` — в корень сайта.
 2. Если `/local/php_interface/init.php` уже существует, **дописать** в него содержимое нашего `init.php`, а не заменять файл.
 3. Открыть админку: **Настройки → Модули** (`/bitrix/admin/module_admin.php?lang=ru`), найти «Mycompany: заказы» и нажать «Установить».
 
@@ -96,7 +97,7 @@ task-2/
 
 Обработчик передаётся массивом `[класс, метод]`, а не именем глобальной функции: нет риска `Cannot redeclare`, нет засорения глобального пространства. Именно из-за этого в наборе больше нет варианта «на функциях» — два обработчика на одно событие давали двойную запись в лог и двойную запись в журнал.
 
-Автозагрузку классов модуля регистрировать вручную не нужно: `Loader::includeModule('mycompany.orders')` сам превращает имя модуля в namespace `Mycompany\Orders` и ставит его на каталог `lib/`. Это видно в `Loader::includeModule()` ядра.
+Автозагрузку классов модуля регистрирует его `include.php` — `Loader::registerNamespace()` ставит namespace `Mycompany\Orders` на каталог `lib/`. Регистрация явная, а не «ядро само догадается»: преобразование идентификатора модуля в namespace — внутренняя деталь версии ядра, а не контракт. С `registerNamespace` модуль одинаково работает из `/local/modules` и из `/bitrix/modules`.
 
 ### `local/php_interface/classes/Analytics/VisitorTracker.php`
 

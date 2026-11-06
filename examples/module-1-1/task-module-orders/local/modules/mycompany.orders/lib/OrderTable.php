@@ -5,10 +5,9 @@
  *
  * Путь в проекте: /local/modules/mycompany.orders/lib/OrderTable.php
  *
- * Модульная автозагрузка: Loader::includeModule('mycompany.orders') превращает
- * название модуля mycompany.orders в namespace Mycompany\Orders и регистрирует
- * его на каталог lib/ (см. Loader::includeModule в ядре). Поэтому имя класса
- * OrderTable + этот файл = Mycompany\Orders\OrderTable без ручной регистрации.
+ * Модульная автозагрузка: namespace Mycompany\Orders зарегистрирован на каталог
+ * lib/ в include.php модуля (Loader::registerNamespace). Поэтому имя класса
+ * OrderTable + этот файл = Mycompany\Orders\OrderTable без require_once.
  */
 
 namespace Mycompany\Orders;
