@@ -49,14 +49,15 @@ $responded = false;
 /**
  * Единственная точка выхода.
  *
- * FinalActions() отправляет ответ и запускает эпилог, но сам по себе не
- * гарантирует остановку скрипта — в ядре Bitrix после него всегда стоит die()
- * (см. CMain::sendJsonAnswer). Поэтому exit обязателен: иначе после 401/403/404
- * выполнение продолжится и в тело уйдёт второй JSON.
+ * FinalActions() собирает буфер, отдаёт ответ и завершает приложение:
+ * внутри Application::end() -> terminate() стоит exit(). Поэтому второй JSON
+ * в тело уйти не может и отдельный exit не нужен. Побочные эффекты при этом
+ * не теряются: OnAfterEpilog, session_write_close(), background jobs
+ * (check_events), ManagedCache::finalize(), закрытие соединений.
  */
 $respond = static function (array $payload, string $status) use ($APPLICATION, &$responded): void {
     if ($responded) {
-        exit;
+        return;
     }
     $responded = true;
 
@@ -66,9 +67,7 @@ $respond = static function (array $payload, string $status) use ($APPLICATION, &
         JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE
     );
 
-    // Эпилог обязателен: почтовые события, закрытие БД, фоновая работа.
-    $APPLICATION->FinalActions();
-    exit;
+    $APPLICATION->FinalActions();   // ответ + эпилог + exit внутри ядра
 };
 
 $request = Application::getInstance()->getContext()->getRequest();

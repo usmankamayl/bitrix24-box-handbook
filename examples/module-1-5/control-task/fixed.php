@@ -41,12 +41,12 @@ $responded = false;
 
 /**
  * Единственная точка выхода.
- * FinalActions() запускает эпилог, но не гарантирует остановку скрипта:
- * в ядре Bitrix после него всегда стоит die(). Поэтому exit обязателен.
+ * FinalActions() собирает буфер, отдаёт ответ и завершает приложение
+ * (Application::end() -> terminate() -> exit). Отдельный exit не нужен.
  */
 $respond = static function (array $payload, string $status) use ($APPLICATION, &$responded): void {
     if ($responded) {
-        exit;
+        return;
     }
     $responded = true;
 
@@ -56,9 +56,8 @@ $respond = static function (array $payload, string $status) use ($APPLICATION, &
         JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE
     );
 
-    // Эпилог обязателен: почтовые события, закрытие БД, фоновая работа.
+    // Ответ, эпилог, закрытие сессии и БД, background jobs — всё внутри ядра.
     $APPLICATION->FinalActions();
-    exit;
 };
 
 $request = Application::getInstance()->getContext()->getRequest();
