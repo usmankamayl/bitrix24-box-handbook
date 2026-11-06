@@ -105,7 +105,7 @@ $makeRow = static function (int $ageSeconds, string $code) use ($now): void {
     }
 };
 
-// 3 строки старше срока, 2 свежие, 1 ровно на границе (30 дней + 60 секунд).
+// 3 строки старше срока и 3 не старше: две свежие и одна за 60 секунд до границы.
 $makeRow(45 * 86400, $seedCode);
 $makeRow(31 * 86400, $seedCode);
 $makeRow(30 * 86400 + 86400, $seedCode);
