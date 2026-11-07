@@ -1471,7 +1471,7 @@ if (file_exists($_SERVER["DOCUMENT_ROOT"] . $component_epilog))
 |---|---|
 | Ищется **только** в папке шаблона | `component_epilog.php` в корне компонента не выполнится (в отличие от `class.php`) |
 | Доступны `$arParams`, `$arResult`, `$component`, `$componentPath` плюс `$templateName`, `$templateFile`, `$templateFolder`, `$templateData` | `$arResult` — уже урезанный, только ключи из `setResultCacheKeys()` |
-| `$templateData` — переменная из `template.php` | так шаблон передаёт данные в эпилог `[проверить]` поведение в конкретной сборке, но механизм стабилен |
+| `$templateData` — переменная из `template.php` | `__IncludePHPTemplate()` объявляет `$templateData = false` перед `include` и передаёт её в эпилог: шаблон присваивает `$templateData = [...]`, эпилог получает это значение |
 | На попадании в кеш эпилог вызывается изнутри `startResultCache()` | он выполняется **до** кода после `if (startResultCache())` в компоненте; `SetTitle()` из компонента перезапишет заголовок, поставленный эпилогом |
 | Эпилог может выполниться дважды | если компонент рендерит шаблон ещё и на попадании в кеш — эпилог должен быть идемпотентным (без безусловных счётчиков и отправок писем) |
 
