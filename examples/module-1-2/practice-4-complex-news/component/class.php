@@ -66,8 +66,6 @@ class StudyNewsComponent extends CBitrixComponent
 
     public function executeComponent(): void
     {
-        global $APPLICATION;
-
         if ($this->arParams['IBLOCK_ID'] <= 0) {
             ShowError(Loc::getMessage('STUDY_NEWS_ERR_NO_IBLOCK'));
             return;
@@ -134,8 +132,8 @@ class StudyNewsComponent extends CBitrixComponent
             'VARIABLES' => $variables,
         ];
 
-        $APPLICATION->SetTitle(Loc::getMessage('STUDY_NEWS_TITLE'));
-
+        // Заголовок ставит дочерний компонент (SET_TITLE => 'Y' в list.php):
+        // у него есть имя инфоблока, у родителя — нет.
         $this->includeComponentTemplate($componentPage);
     }
 
