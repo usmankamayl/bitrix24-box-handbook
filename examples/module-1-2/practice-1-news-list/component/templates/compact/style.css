@@ -1,0 +1,31 @@
+.study-news-compact {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.study-news-compact__item {
+    display: flex;
+    gap: 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.study-news-compact__date {
+    flex: 0 0 96px;
+    color: #6b7280;
+    font-size: 14px;
+}
+
+.study-news-compact__link {
+    color: #111827;
+    text-decoration: none;
+}
+
+.study-news-compact__link:hover {
+    text-decoration: underline;
+}
+
+.study-news-compact__nav {
+    margin-top: 16px;
+}

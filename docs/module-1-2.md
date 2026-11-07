@@ -13,6 +13,10 @@
 
 **О версиях:** материал опирается на устойчивые механизмы компонентов «1С-Битрикс: Управление сайтом». Проверить изменения конкретной сборки на ноябрь 2026 года я не могу. Сигнатуры и поведение отдельных API при необходимости сверяй с документацией установленной версии.
 
+**Откуда точные утверждения про механику.** Всё, что ниже сказано о порядке вызовов, составе ключа кеша и загрузке класса, проверено по исходникам ядра `main/classes/general/component.php`, `main/classes/general/component_template.php`, `main/classes/general/component_engine.php`, `iblock/classes/general/iblockresult.php` (снимок 20.200.300). Там, где поведение могло измениться в новых сборках, стоит пометка `[проверить]`.
+
+**Практика** к этому подразделу лежит в `examples/module-1-2/`: четыре компонента (`practice-1-news-list`, `practice-2-news-filter`, `practice-3-feedback-form`, `practice-4-complex-news`) и контрольное задание с пятью дефектами.
+
 ---
 
 # 1. Что нужно понимать до начала
@@ -433,11 +437,9 @@ class StudyNewsListComponent extends CBitrixComponent
             ]
         );
 
-        if ($result === false) {
-            throw new \RuntimeException(
-                'Не удалось выполнить выборку элементов инфоблока.'
-            );
-        }
+        // Ошибки БД ядро отдаёт исключением; перехват — в executeComponent().
+        // Проверка "$result === false" здесь не нужна: GetList() возвращает
+        // CIBlockResult, а не false. Разбор — в 5.5.
 
         while ($row = $result->GetNext(false, false)) {
             $previewText = (string)$row['PREVIEW_TEXT'];
@@ -574,6 +576,64 @@ $result->GetNext(false, false)
 Если анонс был HTML, из него формируется текст. Перед выводом этот текст всё равно экранируется.
 
 `strip_tags()` здесь **не выступает самостоятельной защитой от XSS**. Безопасность вывода обеспечивается последующим HTML-экранированием.
+
+### Почему проверка `$result === false` — мёртвая ветка
+
+`CIBlockElement::GetList()` возвращает объект `CIBlockResult`. `false` там не появится никогда, поэтому `if ($result === false) { throw ... }` не выполняется ни при каких данных. Это не «защита на всякий случай», а строка, создающая ложное впечатление обработки ошибок.
+
+Реальные отказы выглядят иначе:
+
+| Ситуация | Что происходит |
+|---|---|
+| Ошибка SQL | ядро вызывает `$APPLICATION->ThrowException()` или бросает исключение БД |
+| Инфоблок удалён или деактивирован | пустой результат (не ошибка) |
+| Нет прав на инфоблок | пустой результат при `CHECK_PERMISSIONS => Y` |
+| Неверный тип значения в фильтре | PHP-ошибка типа (`TypeError`), не `false` |
+
+Отсюда две разные ветки в рабочем коде:
+
+```php
+if (!$this->loadIblock()) {          // инфоблока нет — это 404
+    $this->abortResultCache();
+    \Bitrix\Iblock\Component\Tools::process404('Раздел не найден.', true, true, false);
+    return;
+}
+
+try {                                 // ошибка выполнения — это 500 и лог
+    $this->loadItems($navParams);
+} catch (\Throwable $exception) {
+    $this->abortResultCache();
+    AddMessage2Log($exception->getMessage(), 'study.news.list');
+    ShowError('Не удалось загрузить новости.');
+    return;
+}
+```
+
+Пустая выборка при существующем инфоблоке — нормальный результат, а не ошибка.
+
+### Автоматическое экранирование параметров: `$arParams` и `~$arParams`
+
+Для классового компонента `CBitrixComponent::includeComponent()` выполняет (`main/classes/general/component.php`):
+
+```php
+$component->arParams = $component->onPrepareComponentParams($arParams); // сырые значения
+$component->__prepareComponentParams($component->arParams);             // экранирование
+```
+
+`__prepareComponentParams()` для каждого строкового параметра:
+
+1. копирует исходное значение в `$arParams['~' . $NAME]`;
+2. если строка содержит любой из символов `; & < > "`, заменяет `$arParams[$NAME]` на `htmlspecialcharsEx($value)`.
+
+Следствия:
+
+- `onPrepareComponentParams()` получает **сырые** значения — валидация и `(int)` работают как ожидается;
+- в `executeComponent()` и в шаблоне `$arParams['NAME']` — экранированный вариант, а исходный лежит в `$arParams['~NAME']`;
+- для массивов экранируются строковые значения первого уровня, глубже ядро не идёт;
+- ключ кеша строится **без** `~`-ключей, то есть по экранированным значениям (`getCacheID()` пропускает ключи, начинающиеся с `~`);
+- если параметр нужен для SQL, для лога, для `header()` или для сравнения с исходной строкой — берите `~`-версию и обрабатывайте её сами.
+
+Практический вывод для шаблона: выводить `$arParams[...]` без `htmlspecialcharsbx()` технически можно, ядро уже экранировало. Но привычка «данные из БД экранирую, параметры — нет» ломается на первом же `~`-значении, и повторное экранирование даст видимый `&amp;lt;`. Держите одно правило: **экранировать в месте вывода всё, что не является числом или заранее сформированным HTML**.
 
 ---
 
@@ -753,6 +813,56 @@ require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/footer.php';
 
 Это одна из главных тем на собеседованиях.
 
+## 6.0. Из чего складывается ключ кеша
+
+Прежде чем рассуждать «что добавить в ключ», надо знать, что в нём уже есть. Метод `CBitrixComponent::getCacheID()` (`main/classes/general/component.php`):
+
+```php
+public function getCacheID($additionalCacheID = false)
+{
+    $cacheID = $SITE_ID . "|" . $LANGUAGE_ID
+        . ($SITE_TEMPLATE_ID != "" ? "|" . $SITE_TEMPLATE_ID : "")
+        . "|" . $this->__name               // 'study:news.list'
+        . "|" . $this->getTemplateName()    // '.default'
+        . "|";
+
+    foreach ($this->arParams as $k => $v)
+        if (strncmp("~", $k, 1))            // ~-ключи пропускаются
+            $cacheID .= "," . $k . "=" . serialize($v);
+
+    if (($offset = CTimeZone::getOffset()) <> 0)
+        $cacheID .= "|" . $offset;
+
+    if ($additionalCacheID !== false)
+        $cacheID .= "|" . serialize($additionalCacheID);
+
+    if ($this->__currentCounter > 1)        // второй и далее вызов на странице
+        $cacheID .= "|" . $this->__currentCounter;
+
+    return $cacheID;
+}
+```
+
+| Есть в ключе | Нет в ключе |
+|---|---|
+| `SITE_ID`, `LANGUAGE_ID`, шаблон сайта | `$_GET`, `$_POST`, `$_REQUEST` |
+| имя компонента и имя шаблона | cookies, `$_SESSION` |
+| **все** `$arParams`, кроме `~`-ключей | `$USER`, его группы и права |
+| смещение таймзоны пользователя | текущий URL |
+| `$additionalCacheID` (второй аргумент) | данные в БД |
+| номер вызова компонента на странице | время, окружение, конфигурация |
+
+Что из этого следует практически:
+
+1. **Любой параметр уже в ключе.** Меняете `CACHE_GROUPS`, `NEWS_COUNT`, `SORT_BY` — получаете отдельную запись кеша. Дублировать их в `$additionalCacheID` бессмысленно: это только раздувает строку ключа.
+2. **`$_GET` в ключ не входит.** Номер страницы, поисковый запрос, выбранный раздел — всё это надо передавать вторым аргументом, иначе страница 2 получит HTML страницы 1.
+3. **`__currentCounter`** спасает от коллизии, когда один и тот же компонент вызван на странице дважды с одинаковыми параметрами: у второго вызова ключ отличается.
+4. **Порядок ключей в `$arParams` важен** — ключ строится конкатенацией `serialize()` по порядку массива. Один и тот же набор параметров в разном порядке даст разные записи кеша. На практике параметры приходят из одного вызова, но в `$additionalCacheID` лучше передавать массив с фиксированным порядком элементов.
+5. **Смена часового пояса пользователя меняет кеш** — это защита от того, чтобы даты в списке показывались в чужом поясе.
+6. **`~`-ключи в ключ не входят**, потому что это зеркальные копии исходных значений, а не отдельные параметры.
+
+Физически кеш компонента лежит в `/bitrix/cache/<SITE_ID>/<путь компонента>/<hash>/`. Удалять файлы руками не нужно — есть `$CACHE_MANAGER->CleanDir()` и штатная очистка кеша.
+
 ## 6.1. Базовая схема
 
 ```php
@@ -800,6 +910,55 @@ $this->startResultCache(false, $additionalCacheId)
 `false` означает использование времени из параметров компонента.
 
 Второй аргумент добавляет зависимости к идентификатору кеша.
+
+### `CACHE_TYPE`: `A`, `Y`, `N` — это не «включено/выключено»
+
+Значения разбирает сам `startResultCache()`:
+
+```php
+if ($this->arParams["CACHE_TYPE"] == "N"
+    || ($this->arParams["CACHE_TYPE"] == "A"
+        && COption::getOptionString("main", "component_cache_on", "Y") == "N"))
+    return true;   // кеша нет: сразу строим результат
+```
+
+| Значение | Поведение |
+|---|---|
+| `N` | кеш не используется и не создаётся |
+| `A` | «авто»: кешировать, если в настройках модуля `main` («Автокеширование») не выключено глобально |
+| `Y` | кешировать всегда, независимо от глобальной настройки |
+
+`A` — значение по умолчанию, которое редактор предлагает в `.parameters.php`. `Y` нужен там, где кеш является частью контракта: на продакшене с выключенным автокешированием список новостей всё равно должен кешироваться.
+
+Любое другое значение `CBitrixComponent::includeComponent()` приводит к `A`:
+
+```php
+if ($arParams["CACHE_TYPE"] != "Y" && $arParams["CACHE_TYPE"] != "N")
+    $arParams["CACHE_TYPE"] = "A";
+```
+
+### `CACHE_TIME = 0` как способ выключить кеш точечно
+
+`startResultCache()` с нулевым временем жизни возвращает `true` и не находит запись в кеше: данные получаются заново, кеш не создаётся. Именно так стандартные компоненты отключают кеширование, когда появился фильтр, который не учтён в ключе:
+
+```php
+$arParams["CACHE_FILTER"] = $arParams["CACHE_FILTER"] == "Y";
+if (!$arParams["CACHE_FILTER"] && count($arrFilter) > 0)
+    $arParams["CACHE_TIME"] = 0;
+```
+
+Это лучше, чем `CACHE_TYPE = 'N'`: код компонента не ветвится, ветка одна.
+
+### Что `startResultCache()` делает на попадании
+
+Кроме возврата `false` он ещё:
+
+- восстанавливает `$this->arResult` из кеша (только те ключи, что были сохранены, — см. 6.8);
+- восстанавливает закешированные `additionalCSS` / `additionalJS` шаблона;
+- восстанавливает данные динамических областей композита (`frames`);
+- **вызывает `component_epilog.php`** — эпилог на попадании выполняется изнутри `startResultCache()`, уже после печати кешированного HTML.
+
+Поэтому нельзя считать, что «на попадании в кеш ничего не выполняется». Выполняется эпилог и код после `if ($this->startResultCache(...))`.
 
 ---
 
@@ -860,6 +1019,38 @@ $CACHE_MANAGER->RegisterTag('iblock_id_3');
 
 **Важно:** пример регистрации тега выше используется внутри стандартного кеширования компонента. Для самостоятельного тегированного кеша вне этого механизма нужен полноценный жизненный цикл регистрации тегов.
 
+### Кто на самом деле регистрирует `iblock_id_N`
+
+Итерирование результата `CIBlockElement::GetList()` регистрирует тег **само**. В `CIBlockResult::Fetch()` (`iblock/classes/general/iblockresult.php`):
+
+```php
+if (isset($res["IBLOCK_ID"]) && $res["IBLOCK_ID"] != $this->_LAST_IBLOCK_ID
+    && defined("BX_COMP_MANAGED_CACHE"))
+{
+    CIBlock::registerWithTagCache($res["IBLOCK_ID"]);
+    $this->_LAST_IBLOCK_ID = $res["IBLOCK_ID"];
+}
+```
+
+и там же — ветка для пустого результата:
+
+```php
+elseif (defined("BX_COMP_MANAGED_CACHE")
+    && $this->_LAST_IBLOCK_ID == ""
+    && count($this->_FILTER_IBLOCK_ID))
+{
+    foreach ($this->_FILTER_IBLOCK_ID as $iblock_id => $t)
+        CIBlock::registerWithTagCache($iblock_id);
+}
+```
+
+Практические выводы:
+
+1. Явный `RegisterTag('iblock_id_' . $id)` в компоненте, который читает данные через `CIBlockElement`/`CIBlockSection`, **избыточен** — тег уже зарегистрирован. Вреда нет, читаемость выше, поэтому в учебных примерах он оставлен.
+2. Если данные получены **не** через API инфоблока (ORM-сущности, свой SQL, кеш в модуле), тег нужно регистрировать руками, иначе кеш не сбросится никогда.
+3. Тег регистрируется при `Fetch()`. Если результат не итерировали вообще (`GetList()` без `while`), тега не будет — это редкий, но реальный источник «залипшего» кеша.
+4. `RegisterTag()` работает, только когда управляемый кеш запущен. Внутри компонента это обеспечивает `startResultCache()` (`$CACHE_MANAGER->startTagCache($this->__cachePath)`), закрывает — `endResultCache()`. Вызов `RegisterTag()` вне этого окна ничего не запишет.
+
 ### Почему тег регистрируется даже для пустого списка
 
 Сегодня в инфоблоке нет элементов, а завтра появился первый.
@@ -908,6 +1099,26 @@ $filter = $_SESSION['NEWS_FILTER'];
 
 Иначе один посетитель может получить результат, сформированный для другого фильтра.
 
+### `CACHE_GROUPS`: штатный механизм разделения по правам
+
+Стандартные компоненты не изобретают свой ключ, а используют параметр `CACHE_GROUPS`. Каноническая строка из `bitrix:news.list`:
+
+```php
+$this->startResultCache(false, [
+    $arParams['CACHE_GROUPS'] === 'N' ? false : $USER->GetGroups(),
+    $bUSER_HAVE_ACCESS,
+    $arNavigation,
+    $arrFilter,
+    $pagerParameters,
+]);
+```
+
+Что здесь важно:
+
+- `$USER->GetGroups()` возвращает строку групп, а не массив — она стабильна при одинаковом наборе;
+- `CACHE_GROUPS = N` означает «данные одинаковы для всех групп» — так можно делать только после проверки, что выборка не зависит от прав;
+- **ID пользователя при этом не входит** в ключ. Если в списке есть персональные данные («мои заявки», «избранное»), `CACHE_GROUPS` недостаточно: два пользователя одной группы получат один кеш. Персональные данные либо не кешируют, либо добавляют в ключ ID пользователя (и получают запись кеша на каждого).
+
 ### Почему в нашем примере в ключе есть пользователь
 
 Мы применили консервативный вариант:
@@ -949,7 +1160,63 @@ $this->setResultCacheKeys([
 
 **Это не перечисление всех полей, доступных шаблону.**
 
-При построении шаблона на промахе кеша доступен весь текущий `$arResult`. Но на попадании в кеш он не восстанавливается целиком автоматически в том же смысле: нужные для дальнейших действий ключи следует сохранять явно.
+При построении шаблона на промахе кеша доступен весь текущий `$arResult`. Но на попадании в кеш он не восстанавливается целиком: в кеш попадает то, что осталось после урезания.
+
+Точное место урезания — `showComponentTemplate()` (`main/classes/general/component.php`):
+
+```php
+final public function showComponentTemplate()
+{
+    if ($this->__template)
+        $this->__template->includeTemplate($this->arResult);   // шаблон видит ВЕСЬ результат
+
+    if (is_array($this->arResultCacheKeys))
+    {
+        $arNewResult = [];
+        foreach ($this->arResultCacheKeys as $key)
+            if (array_key_exists($key, $this->arResult))
+                $arNewResult[$key] = $this->arResult[$key];
+        $this->arResult = $arNewResult;                        // <- урезание
+    }
+
+    $this->__template->endViewTarget();
+    $this->endResultCache();                                   // <- запись в кеш
+}
+```
+
+Порядок жёсткий:
+
+1. `template.php` получает полный `$arResult`;
+2. сразу после шаблона `$arResult` урезается до `arResultCacheKeys`;
+3. только затем результат пишется в кеш;
+4. `component_epilog.php` вызывается **после** этого (из `includeComponentTemplate()`), поэтому эпилог тоже видит только перечисленные ключи.
+
+Отсюда три правила, которые спрашивают на собеседовании:
+
+- `setResultCacheKeys()` после `includeComponentTemplate()` — бесполезный вызов: урезание и запись уже произошли;
+- ключ, добавленный в `$arResult` после `includeComponentTemplate()`, не попадёт ни в кеш, ни в эпилог;
+- повторный вызов `setResultCacheKeys()` **дополняет** список (`array_merge`), а не заменяет.
+
+Канонический паттерн стандартных компонентов — код после блока кеша, который работает и на попадании, потому что нужные ему поля перечислены явно (`bitrix:news.list`):
+
+```php
+if ($this->startResultCache(false, $cacheId))
+{
+    // ... выборка, $arResult["ITEMS"], $arResult["NAME"], $arResult["SECTION"] ...
+
+    $this->setResultCacheKeys(['ID', 'NAME', 'SECTION', 'ELEMENTS', 'IPROPERTY_VALUES']);
+    $this->includeComponentTemplate();
+}
+
+// Выполняется и на холодном кеше, и на горячем:
+if (isset($arResult['ID']))
+{
+    $APPLICATION->SetTitle($arResult['NAME']);
+    $APPLICATION->AddChainItem($arResult['NAME']);
+}
+```
+
+На попадании в кеш `$arResult['ITEMS']` здесь уже нет — и это нормально: шаблон отрисован в кешированный HTML, а для заголовка и цепочки навигации достаточно `NAME`.
 
 ---
 
@@ -970,16 +1237,36 @@ $this->setResultCacheKeys([
 | Динамические области | Обновление отдельных частей поверх статической страницы |
 
 ```php
-$this->setFrameMode(true);
+$this->setFrameMode(true);   // вызов НЕ обязателен и НЕ включает кеш
 ```
 
-В шаблоне эта настройка относится к работе с композитной технологией.
+`setFrameMode()` — про композит, а не про кеш результата. Точная семантика (`main/classes/general/component.php`):
 
-Она:
+```php
+public function setFrameMode($mode)          // принимает true, false или null
+{
+    if (in_array($mode, [true, false, null], true))
+        $this->frameMode = $mode;
+}
 
-- не заменяет `startResultCache()`;
-- не делает персональные данные автоматически безопасными;
-- сама по себе не превращает произвольный блок в корректную динамическую область.
+public function getFrameMode()
+{
+    return $this->frameMode !== null ? $this->frameMode : true;   // по умолчанию true
+}
+```
+
+| Значение | Что означает |
+|---|---|
+| не вызван (`null` → `getFrameMode()` = `true`) | компонент считается «динамическим»: ядро само создаёт вокруг него автоматическую область композита |
+| `setFrameMode(true)` | компонент **сам** управляет динамическими областями через `createFrame()`; автоматическая область ему не нужна |
+| `setFrameMode(false)` | компонент в композит не пускать: `CBitrixComponent::includeComponent()` отдаёт странице отрицательный голос (`giveNegativeComponentVote`), и страница не будет закеширована как композитная |
+
+Отсюда:
+
+- `setFrameMode(true)` **не** включает кеш и не имеет отношения к `startResultCache()`;
+- ставить его «на всякий случай» в каждый компонент — ошибка: он отключает автоматическую динамическую область, которую ядро сделало бы само, и требует, чтобы вы действительно создавали `createFrame()`;
+- `setFrameMode(false)` уместен для компонента с персональными данными, который не должен попасть в статический HTML композита;
+- ни одна из веток не делает персональные данные безопасными: композит — отдельный механизм, а не замена продуманному кешу.
 
 В нашем учебном компоненте композит специально не настраивается: сначала нужно уверенно понять обычное кеширование.
 
@@ -1022,6 +1309,55 @@ startResultCache()
 
 Это учебная схема стандартного сценария. Внутренний механизм имеет больше этапов, но для практики важны именно эти границы.
 
+## Как ядро выбирает между `class.php` и `component.php`
+
+`CBitrixComponent::initComponent()` (`main/classes/general/component.php`):
+
+```php
+$path2Comp = CComponentEngine::MakeComponentPath($componentName);  // 'study:news.list' → '/study/news.list'
+$componentPath = getLocalPath("components" . $path2Comp);          // /local/... раньше /bitrix/...
+$this->classOfComponent = self::__getClassForPath($componentPath);
+
+if ($this->classOfComponent === "")
+{
+    $componentFile = $_SERVER["DOCUMENT_ROOT"] . $componentPath . "/component.php";
+    if (!file_exists($componentFile) || !is_file($componentFile))
+    {
+        $this->__ShowError(sprintf("'%s' is not a component", $componentName));
+        return false;
+    }
+}
+```
+
+`__getClassForPath()` подключает `class.php` через `include_once` и ищет среди **новых** объявленных классов наследника `CBitrixComponent`; если наследников несколько, остаётся самый производный (`is_subclass_of(candidate, уже найденный)`).
+
+Следствия:
+
+1. **Есть `class.php` с наследником — `component.php` не подключается вообще.** Держать оба файла (даже с пустым `component.php`) — значит иметь мёртвый код и путаницу «что же исполняется».
+2. **Есть `class.php`, но без наследника `CBitrixComponent`** (забыли `extends`, опечатка в имени) — ядро молча пойдёт искать `component.php`. Если его нет: `'study:news.list' is not a component` и белый экран. Это самая частая ошибка при переносе компонента.
+3. **Класс ищется по факту наследования, а не по имени.** Ядро примет любое имя. Соглашение `study:news.list` → `StudyNewsListComponent` нужно не ядру, а людям, `includeComponentClass()` и наследованию компонентов: без него невозможно предсказать, какой класс подключать в своём коде.
+4. **`getLocalPath()`** отдаёт `/local/components/...`, если там есть такой же путь. Копия штатного компонента в `/local/components/bitrix/news.list/` полностью перекрывает `/bitrix/components/bitrix/news.list/` — обновление ядра её не тронет, но и исправления из обновления вы не получите.
+
+## Порядок поиска шаблона
+
+`CBitrixComponentTemplate::generatePossibleTemplatePath()` перебирает папки строго в этом порядке (первый найденный побеждает):
+
+| # | Путь | Когда важен |
+|---|---|---|
+| 1 | `/local/templates/<шаблон сайта>/components/<родитель>/<шаблон родителя>/<компонент>/<шаблон>` | шаблон дочернего компонента внутри шаблона родителя |
+| 2 | `/local/templates/.default/components/<родитель>/…` | то же для шаблона сайта `.default` |
+| 3 | `/local/components/<родитель>/templates/<шаблон родителя>/<компонент>/<шаблон>` | шаблон дочернего внутри самого компонента-родителя |
+| 4 | `/local/templates/<шаблон сайта>/components/<компонент>/<шаблон>` | **переопределение в шаблоне сайта** |
+| 5 | `/local/templates/.default/components/<компонент>/<шаблон>` | переопределение для `.default` |
+| 6 | `/local/components/<компонент>/templates/<шаблон>` | шаблон в поставке компонента |
+| 7–12 | те же шесть путей в `/bitrix/` | поставка ядра |
+
+Практические выводы:
+
+- `/local` всегда раньше `/bitrix`. Шаблон, поправленный в `/bitrix/templates/...`, будет молча перекрыт своим двойником в `/local`;
+- «шаблон дочернего компонента внутри шаблона родителя» — это не магия, а строки 1–3: путь собирается из `GetRelativePath()` родителя и имени его шаблона. Именно поэтому четвёртый аргумент `IncludeComponent()` (объект родителя) обязателен;
+- если шаблон не найден, `includeComponentTemplate()` вызывает `abortResultCache()` и печатает `Cannot find '#NAME#' template with page '#PAGE#'` — то есть ошибка шаблона не кешируется.
+
 ## Где какой `$this`
 
 | Место | `$this` |
@@ -1035,6 +1371,27 @@ startResultCache()
 ```php
 $component = $this->getComponent();
 ```
+
+## Переменные, доступные в шаблоне
+
+`CBitrixComponentTemplate::__IncludePHPTemplate()` подключает `template.php` внутри функции и объявляет там:
+
+| Переменная | Что это |
+|---|---|
+| `$arResult` | результат компонента, передаётся **по ссылке** |
+| `$arParams` | параметры компонента (экранированные, см. 5.5) |
+| `$templateName` | имя шаблона, например `.default` |
+| `$templateFile` | абсолютный путь к `template.php` |
+| `$templateFolder` | папка шаблона, например `/local/components/study/news.list/templates/.default` |
+| `$componentPath` | папка компонента |
+| `$component` | объект компонента (по ссылке) |
+| `$this` | объект шаблона `CBitrixComponentTemplate` |
+| `$APPLICATION`, `$USER`, `$DB` | объявлены `global` внутри функции, поэтому доступны |
+
+Из этого — два практических правила:
+
+- `$templateFolder` нужен для `$this->addExternalJs($templateFolder . '/ext.js')` и путей к картинкам шаблона;
+- `$arResult` в шаблоне — тот же массив, что в компоненте (`по ссылке`), поэтому `unset($arResult['ITEMS'])` в шаблоне сломает урезание и кеширование. Шаблон должен только читать.
 
 ---
 
@@ -1064,6 +1421,23 @@ $arResult['HAS_ITEMS'] = !empty($arResult['ITEMS']);
 
 При стандартном кешировании выполняется при построении шаблона, а не на каждом попадании в кеш.
 
+Что доступно внутри `result_modifier.php` (`__IncludeMutatorFile()` в `component_template.php`):
+
+| Переменная | Что это |
+|---|---|
+| `$arResult` | результат шаблона, **по ссылке** — изменения видны `template.php` |
+| `$arParams` | параметры компонента |
+| `$templateFolder`, `$templateName`, `$component` | как в `template.php` |
+| `$this` | объект шаблона |
+| `$APPLICATION`, `$USER`, `$DB` | глобальные |
+
+Ключевая деталь: `result_modifier.php` **не входит** в цепочку кеширования отдельно. Он выполняется внутри `IncludeTemplate()`, то есть только тогда, когда шаблон действительно рендерится. На попадании в кеш шаблон не рендерится — файл не выполняется. Всё, что он меняет, уже лежит в кешированном HTML.
+
+Поэтому `result_modifier.php` не подходит для:
+
+- данных, которые должны быть в `$arResult` для `component_epilog.php` (эпилог увидит `$arResult` после урезания, а не после модификатора);
+- действий «на каждом запросе» (счётчики, установка заголовка, `AddChainItem`).
+
 Не стоит превращать этот файл в скрытый второй компонент с тяжёлыми запросами и бизнес-правилами.
 
 ## 9.2. `component_epilog.php`
@@ -1076,6 +1450,34 @@ $arResult['HAS_ITEMS'] = !empty($arResult['ITEMS']);
 - выполнить действия с данными, сохранёнными через `SetResultCacheKeys()`.
 
 Не следует без необходимости выводить там основную разметку компонента: это усложняет понимание кеширования.
+
+Где ищется файл и что в нём доступно (`__IncludePHPTemplate()` и `includeComponentEpilog()`):
+
+```php
+$component_epilog = $this->__folder . "/component_epilog.php";   // только папка шаблона
+if (file_exists($_SERVER["DOCUMENT_ROOT"] . $component_epilog))
+{
+    $component->SetTemplateEpilog([
+        "epilogFile" => $component_epilog,
+        "templateName" => $this->__name,
+        "templateFile" => $this->__file,
+        "templateFolder" => $this->__folder,
+        "templateData" => $templateData,   // то, что шаблон положил в $templateData
+    ]);
+}
+```
+
+| Факт | Следствие |
+|---|---|
+| Ищется **только** в папке шаблона | `component_epilog.php` в корне компонента не выполнится (в отличие от `class.php`) |
+| Доступны `$arParams`, `$arResult`, `$component`, `$componentPath` плюс `$templateName`, `$templateFile`, `$templateFolder`, `$templateData` | `$arResult` — уже урезанный, только ключи из `setResultCacheKeys()` |
+| `$templateData` — переменная из `template.php` | так шаблон передаёт данные в эпилог `[проверить]` поведение в конкретной сборке, но механизм стабилен |
+| На попадании в кеш эпилог вызывается изнутри `startResultCache()` | он выполняется **до** кода после `if (startResultCache())` в компоненте; `SetTitle()` из компонента перезапишет заголовок, поставленный эпилогом |
+| Эпилог может выполниться дважды | если компонент рендерит шаблон ещё и на попадании в кеш — эпилог должен быть идемпотентным (без безусловных счётчиков и отправок писем) |
+
+### `component_epilog.php` в учебной практике
+
+`examples/module-1-2/practice-2-news-filter/component/templates/.default/component_epilog.php` добавляет элемент цепочки навигации с количеством найденных элементов. Это демонстрация порядка вызовов: элемент появляется и на холодном, и на горячем кеше — значит эпилог действительно выполняется, а `ITEMS_COUNT` действительно сохранён через `setResultCacheKeys()`.
 
 ## Важный вывод
 
@@ -1326,9 +1728,9 @@ $componentPage = CComponentEngine::ParseComponentPath(
 if (!in_array($componentPage, ['list', 'detail'], true)) {
     \Bitrix\Iblock\Component\Tools::process404(
         'Страница не найдена.',
-        true,
-        true,
-        true
+        true,   // ERROR_404
+        true,   // HTTP-статус 404
+        false   // НЕ подменять всю страницу файлом /404.php и не вызывать die()
     );
 
     return;
@@ -1342,7 +1744,7 @@ if ($componentPage === 'detail') {
             'Страница не найдена.',
             true,
             true,
-            true
+            false
         );
 
         return;
@@ -1404,6 +1806,105 @@ detail.php
 Если разработчик хочет вынести маршрутизацию в отдельный файл, он должен подключить его явно.
 
 В учебном примере это только добавило бы лишнюю косвенность.
+
+### SEF_MODE, VARIABLES и шаблоны URL — как у штатных компонентов
+
+Учебный `component.php` выше разбирает маршрут «руками», потому что так видно механику. В боевом компоненте то же самое делается через настройки SEF, которые описываются в `.parameters.php`:
+
+```php
+$arComponentParameters = [
+    'PARAMETERS' => [
+        // Структуру SEF редактор превращает в поля «SEF_MODE» (Y/N) и «SEF_FOLDER»
+        'SEF_MODE' => [
+            'list' => [
+                'NAME' => 'Страница списка',
+                'DEFAULT' => '',
+                'VARIABLES' => [],
+            ],
+            'detail' => [
+                'NAME' => 'Страница элемента',
+                'DEFAULT' => '#ELEMENT_ID#/',
+                'VARIABLES' => ['ELEMENT_ID'],
+            ],
+        ],
+        // Только для SEF_MODE = N: имена переменных в query-строке
+        'VARIABLE_ALIASES' => [
+            'ELEMENT_ID' => ['NAME' => 'ID элемента'],
+        ],
+        // ... остальные параметры
+    ],
+];
+```
+
+В компоненте это превращается в такой каркас (упрощённый `bitrix:news`):
+
+```php
+$arDefaultUrlTemplates404 = [
+    'list' => '',
+    'detail' => '#ELEMENT_ID#/',
+];
+
+// Пользовательские шаблоны поверх значений по умолчанию
+$urlTemplates = CComponentEngine::makeComponentUrlTemplates(
+    $arDefaultUrlTemplates404,
+    $arParams['SEF_URL_TEMPLATES'] ?? []
+);
+
+$variables = [];
+$engine = new CComponentEngine($this);
+
+if ($arParams['SEF_MODE'] === 'Y') {
+    $componentPage = $engine->guessComponentPath(
+        $arParams['SEF_FOLDER'],
+        $urlTemplates,
+        $variables
+    );
+
+    if ($componentPage === false) {
+        \Bitrix\Iblock\Component\Tools::process404('Страница не найдена', true, true, false);
+        return;
+    }
+} else {
+    // Режим без ЧПУ: те же переменные берутся из $_REQUEST по алиасам
+    CComponentEngine::initComponentVariables(
+        false,
+        ['ELEMENT_ID'],
+        $arParams['VARIABLE_ALIASES'] ?? [],
+        $variables
+    );
+
+    $componentPage = isset($variables['ELEMENT_ID']) ? 'detail' : 'list';
+}
+```
+
+Правила сопоставления адреса (`guessComponentPath()`):
+
+1. Запрошенный адрес должен начинаться с `SEF_FOLDER`, иначе `false`. Компонент, включённый на странице вне своей папки, не найдёт ни одного маршрута — это не баг.
+2. `SEF_FOLDER` нормализуется: `\` → `/`, дубли `//` схлопываются, крайние слэши добавляются.
+3. `#ИМЯ#` в шаблоне превращается в `([^/]+?)` — одна часть пути без слэшей.
+4. Шаблон, оканчивающийся на `/`, дополнительно матчит `index.php` (запрос `/study-news/index.php` = `/study-news/`).
+5. Шаблоны сортируются: сначала без переменных, потом с переменными, потом «жадные» (`addGreedyPart`). Поэтому пустой шаблон `''` для списка не перехватывает детальные адреса.
+6. Переменные возвращаются **строками** из URL — тип, диапазон и существование объекта проверяет ваш код.
+
+Для вложенных разделов (`/news/section/code/`) нужны:
+
+```php
+$engine->addGreedyPart('#SECTION_CODE_PATH#');
+$engine->setResolveCallback(['CIBlockFindTools', 'resolveComponentEngine']);
+```
+
+`addGreedyPart` разрешает переменной содержать `/`, а колбэк `CIBlockFindTools::resolveComponentEngine` доопределяет страницу по данным инфоблока (так `bitrix:news` отличает раздел от элемента).
+
+Для сборки ссылок из шаблона используется обратная операция:
+
+```php
+$detailUrl = CComponentEngine::makePathFromTemplate(
+    $arResult['FOLDER'] . $arResult['URL_TEMPLATES']['detail'],
+    ['ELEMENT_ID' => $item['ID']]
+);
+```
+
+`makePathFromTemplate()` дополнительно подставляет `#SITE_DIR#`, `#SITE#`, `#SERVER_NAME#`. Своя `str_replace('#ELEMENT_ID#', ...)` в шаблоне работает, но теряет эти подстановки и не экранирует значение.
 
 ---
 
@@ -1552,6 +2053,49 @@ $APPLICATION->IncludeComponent(
 Проверку существования, активности и доступности выполняет дочерний компонент.
 
 **Маршрутизация и поиск записи в базе — разные этапы.**
+
+### 404: что означают аргументы `Tools::process404()`
+
+Сигнатура (`iblock/lib/component/tools.php`):
+
+```php
+public static function process404(
+    $message = "",            // текст, выводится через bitrix:system.show_message
+    $defineConstant = true,   // определить константу ERROR_404
+    $setStatus = true,        // отдать HTTP-статус 404
+    $showPage = false,        // подменить рабочую область файлом /404.php и вызвать die()
+    $pageFile = ""            // свой файл вместо /404.php
+) {
+```
+
+Практические следствия:
+
+- `$showPage = true` вызывает `RestartWorkarea()`, подключает `/404.php` и делает `die()` — код после вызова не выполнится, подвал страницы тоже. Для компонента, вставленного в обычную страницу, чаще нужен `false`;
+- `$setStatus = true` — единственный способ отдать реальный HTTP 404 из компонента. Без него поисковик получит 200 с текстом «не найдено» и проиндексирует мусорные адреса;
+- константа `ERROR_404` используется шаблоном сайта и другими компонентами, чтобы не переопределять статус позже;
+- перед вызовом обязателен `abortResultCache()`: 404 не должен попасть в кеш;
+- если нужен свой файл — пятый аргумент, путь относительно корня сайта.
+
+```php
+if ($componentPage === false) {
+    $this->abortResultCache();
+    \Bitrix\Iblock\Component\Tools::process404(
+        'Страница не найдена.',
+        true,                 // ERROR_404
+        $arParams['SET_STATUS_404'] === 'Y',
+        $arParams['SHOW_404'] === 'Y',
+        $arParams['FILE_404']
+    );
+    return;
+}
+```
+
+Проверять надо не текст на странице, а статус:
+
+```bash
+curl -I http://site/study-news/15abc/
+# HTTP/1.1 404 Not Found
+```
 
 ---
 
@@ -1783,7 +2327,41 @@ if (!in_array($sortBy, $allowedFields, true)) {
 
 ---
 
-## 13.5. Формы и CSRF
+## 13.5. Кеш как канал утечки данных
+
+Кеш компонента — самая частая причина «пользователь видит чужое», и это не SQL-инъекция, а логика.
+
+| Что сделано | Что произойдёт | Как исправить |
+|---|---|---|
+| фильтр берётся из `$_GET`, а `startResultCache()` без доп. ключа | все посетители получают выборку первого | фильтр в `$additionalCacheID` или `CACHE_TIME = 0` при непустом фильтре |
+| выборка с `CHECK_PERMISSIONS => Y`, но `CACHE_GROUPS = N` | пользователь без прав получает список с элементами, закешированный админом | `CACHE_GROUPS = Y` или группы в ключе |
+| карточка «мои заявки» в общем кеше | заявки одного пользователя видны другому в той же группе | ID пользователя в ключе либо `CACHE_TYPE = N` |
+| результат зависит от `$_SESSION` (город, валюта, язык) | второй посетитель видит чужой город | значение сессии в `$additionalCacheID` |
+| `SetTitle()`/`SetPageProperty()` в `template.php` | на горячем кеше заголовок от предыдущей страницы | перенести в код после `startResultCache()` или в `component_epilog.php` |
+
+Правило: **в ключ кеша входит только то, что вы положили руками.** Всё, что пришло из `$_GET`, `$_POST`, `$_SESSION`, `$USER` или контекста, надо либо добавить в ключ, либо выключить кеш.
+
+### SEF_FOLDER и путь из настроек
+
+`SEF_FOLDER` попадает в `DETAIL_PAGE_URL`, в ссылки навигации и в `guessComponentPath()`. Значение приходит из настроек компонента, но нормализовать его всё равно надо:
+
+```php
+$folder = str_replace('\\', '/', trim($folder));
+$folder = preg_replace('#/+#', '/', $folder);
+if (preg_match('#(^|/)\.\.(/|$)#', $folder)) {
+    return '/';       // обход каталога в ссылках: '/../..' 
+}
+```
+
+Последствие без проверки: ссылки в разметке уводят за пределы раздела, а если шаблон подставляет значение в `header('Location: ...')` — это уже open redirect.
+
+### Что ещё проверять в компоненте
+
+- **AJAX-ветка без проверки прав.** Компонент отдаёт JSON по `X-Requested-With` — данные при этом должны проверяться так же, как в обычном запросе. Часто «ajax» пишут как отдельный файл без `prolog`, и там теряются и права, и `check_bitrix_sessid()`.
+- **Текст ошибки наружу.** `$exception->getMessage()` в JSON-ответе выдаёт пути, SQL и имена таблиц.
+- **`print_r($_REQUEST)` в шаблоне** при отладке: уезжает в кеш и в публичный HTML.
+
+## 13.6. Формы и CSRF
 
 Для обычной POST-формы Bitrix:
 
@@ -1831,7 +2409,7 @@ if ($request->isPost()) {
 
 ---
 
-## 13.6. Ошибки пользователю и разработчику
+## 13.7. Ошибки пользователю и разработчику
 
 Пользователю:
 
@@ -2008,7 +2586,143 @@ Bitrix\Iblock\Elements\ElementNewsTable
 
 ---
 
-# 16. Локализация
+# 16. AJAX-компоненты и подписанные параметры
+
+«AJAX-компонент» — не отдельный тип компонента. Это тот же компонент, который на запрос с заголовком `X-Requested-With: XMLHttpRequest` (или своим маркером) возвращает не HTML страницы, а JSON или фрагмент разметки.
+
+## 16.1. Кто решает, что вернуть
+
+Решение принимает сервер по признаку запроса, а не клиент по скрытому полю формы:
+
+```php
+$request = \Bitrix\Main\Context::getCurrent()->getRequest();
+
+if ($request->isPost() && $request->getPost('study_feedback') === 'Y') {
+    $this->processPost();
+
+    if ($request->getHeader('X-Requested-With') === 'XMLHttpRequest') {
+        $this->sendJson();
+        return;
+    }
+}
+```
+
+Почему не скрытое поле `ajax=Y`:
+
+- клиент может попросить JSON при обычной отправке и получить на экране `{"success":false}`;
+- при падении JS форма обычным POST уйдёт с `ajax=Y` и пользователь останется с голым JSON;
+- признак в заголовке выставляет сам браузер (`fetch`, `XMLHttpRequest`), и он не попадает в HTML-форму.
+
+Ответ компонента:
+
+```php
+private function sendJson(): void
+{
+    global $APPLICATION;
+
+    $APPLICATION->RestartBuffer();                       // выбросить накопленный HTML
+    header('Content-Type: application/json; charset=UTF-8');
+
+    echo \Bitrix\Main\Web\Json::encode([
+        'success' => $this->arResult['SUCCESS'],
+        'errors' => array_values($this->errors),
+    ]);
+
+    die();                                               // без эпилога и подвала
+}
+```
+
+`RestartBuffer()` обязателен: без него в ответ попадут `<html>`, шапка сайта и предупреждения ядра, и `JSON.parse` упадёт.
+
+## 16.2. Что нельзя терять в AJAX-ветке
+
+| Проверка | Почему в AJAX её забывают |
+|---|---|
+| `check_bitrix_sessid()` | «это же не форма, а запрос из JS» — и любой сайт дёргает эндпоинт |
+| права пользователя | `$USER->IsAuthorized()` и проверка прав на инфоблок/раздел |
+| валидация типов | `$_POST` в JSON-ветке обрабатывают «как получится» |
+| CSRF-токен в самом запросе | `fetch` без `credentials: 'same-origin'` теряет куки сессии |
+| отсутствие кеша | `CACHE_TYPE = N` для формы; иначе ответ закешируется вместе с ошибками |
+
+Отдельный `ajax.php` в корне сайта без `prolog_before.php` — типовая дыра: в нём нет ни сессий, ни `$USER`, ни проверок, зато есть доступ к `$_REQUEST` и `Loader`. Если очень нужен отдельный файл, он начинается с:
+
+```php
+require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_before.php';
+```
+
+и дальше повторяет те же проверки, что компонент.
+
+## 16.3. Подписанные параметры
+
+Проблема: компоненту нужно отдать в JS часть своих параметров (`IBLOCK_ID`, `NEWS_COUNT`, `FILTER_NAME`), чтобы клиент мог запросить следующую страницу. Если передать их открытым текстом, клиент может подменить `IBLOCK_ID` и получить чужой инфоблок.
+
+Механизм «подписанных параметров» (`CBitrixComponent`, начиная с 20.5.x — `[проверить]` в вашей сборке; в 20.200.300 методы уже есть):
+
+```php
+class StudyNewsListComponent extends CBitrixComponent
+{
+    // Какие параметры ядро подпишет и отдаст шаблону
+    protected function listKeysSignedParameters(): array
+    {
+        return ['IBLOCK_ID', 'NEWS_COUNT', 'SORT_BY1', 'SORT_ORDER1'];
+    }
+}
+```
+
+`includeComponent()` при вызове компонента делает:
+
+```php
+$keysToExport = $component->listKeysSignedParameters();
+if ($keysToExport)
+{
+    $component->storeSignedParameters(array_intersect_key($arParams, array_combine($keysToExport, $keysToExport)));
+}
+```
+
+`storeSignedParameters()` вызывает `\Bitrix\Main\Component\ParameterSigner::signParameters($componentName, $params)`: сериализует массив, кодирует base64 и подписывает `\Bitrix\Main\Security\Sign\Signer` с солью из имени компонента.
+
+В шаблоне строка забирается так:
+
+```php
+<div class="study-news"
+     data-signed-params="<?= htmlspecialcharsbx((string)$this->getComponent()->getSignedParameters()) ?>">
+```
+
+На сервере в AJAX-ветке параметры восстанавливаются и проверяются подписью:
+
+```php
+use Bitrix\Main\Component\ParameterSigner;
+use Bitrix\Main\Security\Sign\BadSignatureException;
+
+$signed = (string)$request->getPost('signed_params');
+
+try {
+    $params = ParameterSigner::unsignParameters('study:news.list', $signed);
+} catch (BadSignatureException $exception) {
+    // Подпись не сходится: параметры подменены или взяты из другого компонента
+    return;
+}
+
+$iblockId = (int)($params['IBLOCK_ID'] ?? 0);
+```
+
+Что это даёт и чего не даёт:
+
+- **даёт**: клиент не может изменить параметры, не сломав подпись; подпись привязана к имени компонента;
+- **не даёт**: не заменяет проверку прав. Подписанный `IBLOCK_ID` — это тот же инфоблок, который был в настройках, но доступ к данным всё равно проверяется в выборке;
+- **не даёт**: не защищает от повторного использования строки — она живёт, пока живёт ключ подписи. Для одноразовости нужен свой nonce в сессии.
+
+## 16.4. Что проверить в своей сборке
+
+- есть ли `ParameterSigner` (`/bitrix/modules/main/lib/component/parametersigner.php`);
+- поддерживает ли `HttpRequest::getHeader('X-Requested-With')` — в старых сборках заголовок читался только из `$_SERVER['HTTP_X_REQUESTED_WITH']`;
+- как ведёт себя `RestartBuffer()` в вашем шаблоне сайта (в некоторых шаблонах он не очищает буфер композита).
+
+Проверка простая: отправьте форму без JS (отключите его в браузере) и с JS. Поведение должно быть одинаково корректным, отличаться только форматом ответа.
+
+---
+
+# 17. Локализация
 
 В учебных примерах строки записаны прямо в коде, чтобы не увеличивать количество файлов.
 
@@ -2046,11 +2760,49 @@ $MESS['STUDY_NEWS_MODULE_ERROR'] =
 - отделение сообщений от логики;
 - удобство сопровождения.
 
+## 17.1. Три места, где живут сообщения
+
+| Файл | Что в нём | Кто загружает |
+|---|---|---|
+| `/lang/ru/class.php` | сообщения компонента (`ShowError`, ошибки) | `Loc::loadMessages(__FILE__)` в `class.php`, либо `$this->includeComponentLang()` |
+| `/lang/ru/.parameters.php` | подписи в интерфейсе настроек | ядро при открытии настроек компонента |
+| `/templates/<шаблон>/lang/ru/template.php` | тексты шаблона | `CBitrixComponentTemplate::IncludeLangFile()` автоматически перед `template.php` |
+
+Файлы компонента подключаются не вручную, а методом `includeComponentLang()`:
+
+```php
+protected function onIncludeComponentLang(): void
+{
+    // вызывается ядром ДО onPrepareComponentParams()
+    $this->includeComponentLang('class.php');
+}
+```
+
+Если метод не переопределён, ядро грузит `lang/<язык>/component.php` — поэтому сообщения из `class.php` в классовых компонентах либо грузят явно, либо `Loc::loadMessages(__FILE__)` в начале файла.
+
+## 17.2. Что проверять в языке
+
+- Коды — заглавными, с префиксом компонента (`STUDY_NEWS_ERR_NO_IBLOCK`), иначе `GetMessage()` вернёт код вместо текста, и это вылезет в интерфейс.
+- Подстановки — вторым аргументом `Loc::getMessage($code, ['#FIELD#' => $name])`; `str_replace` руками делать не нужно.
+- В шаблоне работает `GetMessage()`, в классе — `Loc::getMessage()`; это одна и та же таблица сообщений, но разные точки входа.
+- Файл `lang/ru/.parameters.php` подключается ядром, `Loc::loadMessages(__FILE__)` в `.parameters.php` не нужен.
+- Пропущенный ключ не падает: `Loc::getMessage('НЕТ_ТАКОГО')` вернёт `НЕТ_ТАКОГО`. Поэтому тесты на тексты бесполезны, а на код — осмысленны.
+
 ---
 
-# 17. Что могут попросить на собеседовании
+# 18. Что могут попросить на собеседовании
 
 Ниже — вопросы и ответы в форме, близкой к устной.
+
+Уровни: на **Junior** ждут определения и понимание «зачем», на **Middle** — механику и типичные ошибки, на **Senior** — состав ключа кеша, порядок вызовов ядра и последствия решений.
+
+| Уровень | Вопросы |
+|---|---|
+| Junior | 1–7, 9, 16, 21 |
+| Middle | 8, 10–15, 19, 20, 22, 26, 27, 28, 33 |
+| Senior | 17, 18, 23–25, 29–32, 34–36 |
+
+Что реально спрашивают на вакансиях Bitrix24 Box: вопросы 8, 11, 14, 17, 23, 26, 29–31 — почти в каждой первой технической беседе.
 
 ## 1. Что такое компонент Bitrix?
 
@@ -2082,6 +2834,8 @@ $MESS['STUDY_NEWS_MODULE_ERROR'] =
 
 Процедурный через `component.php` и классовый через наследование от `CBitrixComponent`.
 
+Если в папке есть `class.php` с наследником `CBitrixComponent`, ядро использует его, а `component.php` не подключает вообще. Держать оба файла «на всякий случай» бессмысленно.
+
 В классовом варианте основную логику обычно размещают в `executeComponent()`.
 
 ## 6. Для чего `onPrepareComponentParams()`?
@@ -2094,9 +2848,7 @@ $MESS['STUDY_NEWS_MODULE_ERROR'] =
 
 ## 8. Что делает `startResultCache()`?
 
-Проверяет доступность действительного кеша и организует формирование нового результата при его отсутствии.
-
-На попадании в кеш возвращает управление так, чтобы код получения данных внутри соответствующей ветки не выполнялся повторно.
+Строит ключ кеша (`getCacheID()`), ищет запись, при попадании печатает кешированный HTML, восстанавливает `$arResult` по сохранённым ключам, регистрирует `additionalCSS`/`additionalJS` и динамические области, вызывает `component_epilog.php` — и возвращает `false`. При промахе возвращает `true` и запускает управляемый кеш (теги), чтобы результат можно было записать в `endResultCache()`.
 
 ## 9. Нужно ли кешировать пустую выборку?
 
@@ -2178,119 +2930,152 @@ $MESS['STUDY_NEWS_MODULE_ERROR'] =
 
 Просто «очистить весь кеш» — полезный диагностический шаг, но не объяснение причины.
 
----
+## 26. Что входит в ключ кеша компонента по умолчанию?
 
-# 18. Практические задачи для закрепления
+`SITE_ID`, `LANGUAGE_ID`, шаблон сайта, имя компонента, имя шаблона, все `$arParams` (кроме `~`-ключей), смещение таймзоны пользователя, значение второго аргумента `startResultCache()` и номер вызова компонента на странице (`__currentCounter`). Не входят: `$_GET`, `$_POST`, `$_SESSION`, `$USER`, текущий URL, данные БД.
 
-## Задача 1. Повтори простой компонент
+## 27. Компонент вызван на странице дважды с одинаковыми параметрами — будет коллизия кеша?
 
-Не копируй сразу весь код.
+Нет. В ключ добавляется `__currentCounter` — порядковый номер вызова этого компонента на странице. Второй вызов получит отдельную запись.
 
-Сначала напиши:
+## 28. Чем `$arParams['X']` отличается от `$arParams['~X']`?
 
-1. Структуру.
-2. Описание.
-3. Параметры.
-4. Класс.
-5. Выборку.
-6. Шаблон.
-7. Кеширование.
+`X` — значение после `htmlspecialcharsEx()`, если строка содержала `; & < > "`. `~X` — исходное значение. Экранирование делает `__prepareComponentParams()` уже после `onPrepareComponentParams()`; в ключ кеша попадают только не-`~` значения.
 
-После этого сравни с примером.
+## 29. Что происходит с `$arResult` после `includeComponentTemplate()`?
 
-**Критерий готовности:** можешь объяснить назначение каждой части без чтения комментариев.
+Он урезается до ключей из `setResultCacheKeys()`, и только потом пишется в кеш. `template.php` при этом видит полный результат, а `component_epilog.php` и код после `includeComponentTemplate()` — урезанный.
 
----
+## 30. Что не так с `setResultCacheKeys()` после `includeComponentTemplate()`?
 
-## Задача 2. Проверь кеширование экспериментально
+Ничего не произойдёт: урезание и запись в кеш уже выполнены внутри `showComponentTemplate()`. В кеш попадёт весь `$arResult`, эпилог получит все поля.
 
-На учебном стенде:
+## 31. Сколько раз выполняется `component_epilog.php` и когда?
 
-1. Поставь логирование внутри `loadItems()`.
-2. Открой страницу дважды.
-3. Убедись, что при действительном кеше загрузка повторно не выполняется.
-4. Измени новость через штатную административную часть.
-5. Проверь обновление результата.
-6. Удали или деактивируй все новости.
-7. Убедись, что пустой результат кешируется.
-8. Добавь первую новость.
-9. Проверь актуализацию пустого списка.
+На промахе кеша — один раз, после шаблона. На попадании — изнутри `startResultCache()`, то есть до кода после блока кеша; если компонент рендерит шаблон и на попадании, эпилог выполнится второй раз. Писать его нужно идемпотентно.
 
-Не оставляй подробное диагностическое логирование в рабочем проекте.
+## 32. В компоненте есть и `class.php`, и `component.php`. Что выполнится?
 
----
+`class.php`: `__getClassForPath()` ищет наследника `CBitrixComponent`, и если нашёл — `component.php` не подключается. Если `class.php` есть, но наследника нет, ядро перейдёт к `component.php`; если нет и его — `'...' is not a component`.
 
-## Задача 3. Добавь выбор сортировки
+## 33. `CACHE_TYPE = 'A'` и `'Y'` — в чём разница?
 
-Параметры:
+`A` — авто: кешировать, если в настройках модуля `main` не выключено глобальное автокеширование. `Y` — кешировать всегда. `N` — не кешировать. Любое другое значение `includeComponent()` приводит к `A`.
 
-```text
-SORT_BY
-SORT_ORDER
-```
+## 34. Почему в компоненте с кешем ломается пагинация и как это лечится?
 
-Обязательные условия:
+Номер страницы читается из `$_GET`, а `$_GET` не входит в ключ кеша, поэтому все страницы получают HTML первой. Лечится передачей `CDBResult::GetNavParams($navStartParams)` вторым аргументом `startResultCache()` и `CPageOption::SetOptionString('main', 'nav_page_in_session', 'N')`, чтобы страница не запоминалась в сессии.
 
-- белый список полей;
-- только `ASC` или `DESC`;
-- корректные значения по умолчанию;
-- стабильная дополнительная сортировка.
+## 35. Чем `CACHE_FILTER` отличается от `CACHE_GROUPS`?
+
+`CACHE_FILTER` определяет, попадает ли фильтр в ключ кеша: при `N` и непустом фильтре компонент вообще отключает кеш (`CACHE_TIME = 0`), при `Y` — создаёт отдельную запись на каждое сочетание. `CACHE_GROUPS` добавляет группы пользователя: `N` — один кеш для всех.
+
+## 36. Чем опасен `Tools::process404($msg, true, true, true)`?
+
+Четвёртый аргумент `$showPage = true` вызывает `RestartWorkarea()`, подключает `/404.php` и `die()`: остальная страница (включая подвал) не отрендерится, а код после вызова не выполнится. Для компонента внутри обычной страницы нужен `false`, а статус 404 обеспечивает третий аргумент.
 
 ---
 
-## Задача 4. Добавь фильтр
+# 19. Практические задачи
 
-Например, фильтр по году публикации.
+Все решения лежат в `examples/module-1-2/`. Каждая папка самодостаточна:
+`component/` — готовая структура для `/local/components/study/<имя>/`, рядом
+страница и README с порядком установки и таблицей экспериментов.
 
-Условия:
+| Задача | Папка | Что проверяется |
+|---|---|---|
+| 1. Простой компонент списка | `practice-1-news-list/` | структура, параметры, выборка с правами, пагинация, кеш с тегом, два шаблона |
+| 2. Фильтр и сортировка | `practice-2-news-filter/` | три источника условий, `CACHE_FILTER`, `component_epilog.php` |
+| 3. Форма обратной связи | `practice-3-feedback-form/` | POST, `sessid`, капча, throttle, `Event::send`, AJAX-ветка |
+| 4. Комплексный компонент | `practice-4-complex-news/` | ЧПУ, `SEF_URL_TEMPLATES`, 404, дочерние компоненты |
+| 5. Пять дефектов | `control-task/` | code review по механизмам, а не по вкусу |
 
-- значение валидируется;
-- используется при выборке;
-- участвует в зависимостях кеша;
-- при смене фильтра сбрасывается текущая страница пагинации;
-- фильтр работает без JavaScript.
+## Задача 1. Простой компонент (60–90 мин)
 
-Только после этого добавляй AJAX.
+Не копируй код сразу. Порядок:
+
+1. Структура папок и `.description.php`.
+2. `.parameters.php`: какие параметры реально нужны, какие — «на будущее» (вторые не добавляй).
+3. `class.php`: `onPrepareComponentParams()` → нормализация, `executeComponent()` → проверки, кеш, данные, шаблон.
+4. Шаблон: только вывод и экранирование.
+5. Кеш: тег инфоблока, `CACHE_GROUPS`, номер страницы в ключе.
+
+Потом открой `practice-1-news-list/component/class.php` и сравни порядок
+операций. Критерий: можешь объяснить, почему `startResultCache()` стоит именно
+там, где стоит, и что произойдёт, если перенести его на строку выше.
+
+## Задача 2. Фильтр и сортировка (60–90 мин)
+
+Добавь к списку:
+
+- белый список полей сортировки и направления (`ASC`/`DESC`), стабильная вторая сортировка;
+- внешний фильтр через `FILTER_NAME` (`$GLOBALS['arrFilter']`);
+- фильтр из `$_GET` по разделу и по названию;
+- политику кеша: `CACHE_FILTER = Y` → фильтр в ключе; `N` → `CACHE_TIME = 0` при непустом фильтре;
+- сброс `PAGEN_1` при смене фильтра.
+
+Эталон: `practice-2-news-filter/`. Проверять по таблице экспериментов в README:
+особенно `?q[]=1` и `?section=abc` — оба должны молча игнорироваться, без
+warning и без мусора в фильтре.
+
+## Задача 3. Форма обратной связи (90–120 мин)
+
+Требования:
+
+- `bitrix_sessid_post()` в форме, `check_bitrix_sessid()` до чтения POST;
+- порядок проверок: sessid → honeypot → подпись времени → throttle → поля → капча;
+- длины полей ограничены на сервере;
+- отправка через `\Bitrix\Main\Mail\Event::send()`, ошибки — в лог;
+- при ошибке данные формы сохраняются, капча обновляется;
+- AJAX опционален и не ломает обычную отправку.
+
+Эталон: `practice-3-feedback-form/`. Отдельно разбери, почему `mail()` с
+`From: noreply@$_SERVER['HTTP_HOST']` — уязвимость (Host header) и почему
+`Event::send()` не гарантирует доставку.
+
+## Задача 4. Комплексный компонент (90–120 мин)
+
+Раздел `/study-news/`: список + детальная, ЧПУ, 404.
+
+Проверь адреса и **статусы**:
+
+| URL | Ожидание |
+|---|---|
+| `/study-news/` | 200, список |
+| `/study-news/15/` | 200, детальная |
+| `/study-news/15abc/` | 404 |
+| `/study-news/999999999/` | 404 |
+| `/study-news/15/extra/` | 404 |
+
+Дополнительно: нормализуй `SEF_FOLDER`, передай родителя четвёртым аргументом
+`IncludeComponent()`, проверь, что шаблон дочернего компонента из
+`.../study/news/.default/bitrix/news.list/` действительно применяется.
+
+Эталон: `practice-4-complex-news/`.
+
+## Задача 5. Code review: пять дефектов (30–40 мин)
+
+`control-task/broken/` — компонент с пятью дефектами, `control-task/fixed/` —
+эталон. Найденное формулируется как «ошибка → причина → последствие →
+исправление», с указанием механизма ядра. Разбор — в
+`control-task/README.md`; открывать его только после своей версии.
+
+## Критерии приёмки подраздела
+
+1. Написаны и запущены четыре компонента; по каждому пройдена таблица
+   экспериментов из README.
+2. Можешь без подсказок назвать: что входит в ключ кеша по умолчанию; что
+   происходит с `$arResult` после `includeComponentTemplate()`; где ищется
+   `component_epilog.php` и когда он выполняется; чем `class.php` отличается от
+   `component.php` с точки зрения ядра.
+3. Найдены все пять дефектов контрольного задания, у каждого назван механизм.
+4. На любой вопрос из раздела «Вопросы для собеседования» отвечаешь своими
+   словами, без чтения файла.
+
 
 ---
 
-## Задача 5. Повтори комплексный компонент
-
-Проверь адреса:
-
-```text
-/study-news/
-/study-news/15/
-/study-news/999999999/
-/study-news/abc/
-/study-news/15/extra/
-```
-
-Ожидаемое поведение:
-
-- корень — список;
-- существующий доступный элемент — детальная страница;
-- отсутствующий или недоступный элемент — поведение «не найдено»;
-- неизвестный маршрут — 404;
-- неизвестный путь не подменяется молча списком.
-
-Проверяй не только текст «Страница не найдена», но и HTTP-статус ответа.
-
----
-
-## Задача 6. Сделай второй шаблон
-
-Создай `compact`:
-
-- без картинки;
-- только дата и заголовок;
-- без изменения логики компонента.
-
-Это проверит, действительно ли представление отделено от данных.
-
----
-
-# 19. План подготовки на семь занятий
+# 20. План подготовки на семь занятий
 
 | Занятие | Что изучить | Что должно получиться |
 |---|---|---|
@@ -2313,7 +3098,7 @@ SORT_ORDER
 
 ---
 
-# 20. Итоговая шпаргалка
+# 21. Итоговая шпаргалка
 
 ```text
 Компонент:
@@ -2369,6 +3154,25 @@ HTML-экранирование:
 
 Композит:
     отдельный механизм, не синоним кеша компонента
+
+Ключ кеша по умолчанию:
+    сайт + язык + шаблон сайта + компонент + шаблон + все $arParams
+    (+ tz, + доп. ключ, + номер вызова); $_GET/$USER — не входят
+
+$arParams[X] / ~X:
+    экранированное / исходное значение; в ключ идут только не-~
+
+class.php vs component.php:
+    есть наследник CBitrixComponent — component.php не выполняется
+
+$arResult после includeComponentTemplate():
+    урезан до setResultCacheKeys(); эпилог видит только эти ключи
+
+component_epilog.php:
+    только в папке шаблона; на попадании вызывается из startResultCache()
+
+process404(msg, ERROR_404, HTTP 404, подменить страницу и die, файл):
+    четвёртый аргумент = true убивает остальную страницу
 ```
 
 **Ты готов к базовым вопросам о компонентах, когда можешь самостоятельно написать список с кешированием, собрать раздел «список + детальная» и объяснить поведение каждого из них при пустых данных, ошибке, неизвестном URL и смене пользователя.**

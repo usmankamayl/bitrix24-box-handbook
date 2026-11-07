@@ -1,0 +1,64 @@
+.study-feedback {
+    max-width: 560px;
+}
+
+.study-feedback__form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.study-feedback__field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 14px;
+    color: #374151;
+}
+
+.study-feedback__field input,
+.study-feedback__field textarea,
+.study-feedback__captcha input[type="text"] {
+    padding: 9px 11px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font: inherit;
+}
+
+.study-feedback__hp {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.study-feedback__captcha {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.study-feedback__submit {
+    align-self: flex-start;
+    padding: 10px 20px;
+    border: 0;
+    border-radius: 8px;
+    background: #2563eb;
+    color: #fff;
+    cursor: pointer;
+}
+
+.study-feedback__error {
+    color: #b91c1c;
+    font-size: 13px;
+    font-style: normal;
+}
+
+.study-feedback__success {
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: #ecfdf5;
+    color: #065f46;
+}

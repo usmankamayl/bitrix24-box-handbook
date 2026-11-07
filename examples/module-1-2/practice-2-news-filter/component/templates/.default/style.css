@@ -1,0 +1,77 @@
+.study-filter__form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding: 16px;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+}
+
+.study-filter__field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 14px;
+    color: #374151;
+}
+
+.study-filter__field input,
+.study-filter__field select {
+    min-width: 220px;
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.study-filter__submit {
+    padding: 9px 16px;
+    border: 0;
+    border-radius: 8px;
+    background: #2563eb;
+    color: #fff;
+    cursor: pointer;
+}
+
+.study-filter__reset {
+    padding: 9px 4px;
+    color: #2563eb;
+}
+
+.study-filter__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.study-filter__item {
+    display: flex;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.study-filter__date {
+    flex: 0 0 96px;
+    color: #6b7280;
+    font-size: 14px;
+}
+
+.study-filter__item a {
+    color: #111827;
+    text-decoration: none;
+}
+
+.study-filter__item a:hover {
+    text-decoration: underline;
+}
+
+.study-filter__nav {
+    margin-top: 20px;
+}
+
+.study-filter__empty {
+    color: #6b7280;
+}
